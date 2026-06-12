@@ -18,9 +18,12 @@ This document defines functional requirements, configuration schema, supported M
 - Transports: **stdio**, **sse**, **streamable_http**, **websocket** (`http_sse` accepted as alias for `sse`)
 - MCP operations: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`
 - TOML-based multi-server configuration
+- Cursor `mcp.json` import and optional hot-reload into `config.toml` (GUI)
 - CLI with structured exit codes
 - macOS GUI for interactive server exploration
 - Custom stdio subprocess transport with deadlock-safe I/O
+- DMG packaging for the GUI app (`make dmg`)
+- Automated test suite: Swift unit tests + CLI/SSE integration scripts
 
 ### Out of scope
 
@@ -35,6 +38,7 @@ This document defines functional requirements, configuration schema, supported M
 | Product | Type | Entry point |
 |---------|------|-------------|
 | `MCPC` | Library | `import MCPC` |
+| `MCPClientGUICore` | Library | `import MCPClientGUICore` |
 | `mcpc` | CLI executable | `Sources/MCPClientCLI/main.swift` |
 | `mcpc-gui` | GUI executable | `Sources/MCPClientGUI/MCPClientGUIApp.swift` |
 
@@ -65,6 +69,9 @@ Resolution order:
 | `protocol_version` | string | `"2024-11-05"` | MCP protocol version for handshake |
 | `request_timeout_seconds` | integer | `120` | Per-request timeout for MCP calls |
 | `log_server_stderr` | boolean | `false` | Forward subprocess stderr to client stderr (stdio only) |
+| `mcp_json_hot_reload` | boolean | `false` | Watch Cursor `mcp.json` and sync into `config.toml` (GUI) |
+| `mcp_json_watch_paths` | string array | `[]` | Override watch paths (default: `~/.cursor/mcp.json`, `.cursor/mcp.json`) |
+| `mcp_json_synced_servers` | string array | `[]` | Server names managed by Cursor sync (written by importer) |
 
 #### `[logging]`
 
@@ -219,7 +226,11 @@ Arguments to `call-tool` are passed as `--key value` pairs. All values are initi
 
 General errors (config, connection, parse) exit **1**.
 
-### 6.3 Connection lifecycle
+### 6.3 Argument parsing
+
+CLI parsing is implemented in **`MCPCLI`** (`Sources/MCPC/MCPCLI.swift`) and unit-tested. The CLI executable delegates to `MCPCLI.parseArguments(_:)` and handles `MCPCLIError.helpRequested` by printing usage.
+
+### 6.4 Connection lifecycle
 
 Each CLI invocation:
 
@@ -227,7 +238,7 @@ Each CLI invocation:
 2. Creates transport and connects
 3. Runs `initialize`
 4. Executes the command
-5. Disconnects on exit (`defer` block)
+5. Awaits `disconnect()` before exit
 
 `list-servers` does not open an MCP connection.
 
@@ -235,7 +246,7 @@ Each CLI invocation:
 
 ### 7.1 Layout
 
-- **Sidebar:** Config file picker, server list with transport endpoint labels
+- **Sidebar:** Config file picker, server list with transport endpoint labels, Cursor import, hot-reload toggle
 - **Connection bar:** Status indicator, connect/disconnect, ping
 - **Tabs:** Tools, Resources, Prompts
 - **Output panel:** Monospaced results and error display
@@ -251,10 +262,24 @@ Each CLI invocation:
 | Run Tool | Send JSON arguments from editor; show formatted result |
 | Read Resource | Fetch selected URI |
 | Run Prompt | Send JSON string-map arguments |
+| Import Cursor servers | Parse `mcp.json`, merge into `config.toml` (skip or replace on conflict) |
+| Toggle hot reload | Enable/disable `mcp_json_hot_reload`; watch paths and sync on file change |
 
 Argument editors are pre-filled from tool `inputSchema` or prompt argument definitions when an item is selected.
 
-### 7.3 Lifecycle
+GUI application logic lives in **`MCPClientGUICore`** (`MCPAppModel`, `JSONArgumentsParser`). SwiftUI views in `MCPClientGUI` bind to the model.
+
+### 7.3 Cursor `mcp.json` sync
+
+When `mcp_json_hot_reload` is enabled, `MCPJSONFileWatcher` watches configured paths (default: `~/.cursor/mcp.json` and `.cursor/mcp.json` relative to the config directory). On change, `CursorMCPSync` merges imported servers into `config.toml`:
+
+- Servers previously synced from Cursor but absent from the new JSON are **removed**
+- Manually defined servers (not in `mcp_json_synced_servers`) are **preserved**
+- If the connected server's config changes, the GUI disconnects and prompts reconnect
+
+Import supports stdio (`command`/`args`/`cwd`/`env`), SSE (`url` with `/sse`), streamable HTTP (`type: streamable-http`), and WebSocket (`ws://`/`wss://`).
+
+### 7.4 Lifecycle
 
 - On scene background or app termination: `shutdown()` disconnects cleanly
 - MCP client library warnings during shutdown are suppressed (log level `.error` for `MCPClient` labels)
@@ -307,11 +332,11 @@ Transport and protocol errors propagate from SwiftMCPClient (`MCPError`). Notabl
 
 ### 9.3 CLI errors
 
-`CLIError`: missing values, unknown options, missing command, invalid JSON for `--args`.
+`MCPCLIError`: missing values, unknown options, missing command, invalid JSON for `--args`, help requested.
 
 ## 10. Test server specification
 
-The bundled `test-server/` is the **only Python code** in the repository — a [FastMCP](https://github.com/modelcontextprotocol/python-sdk) stdio server used for integration tests. The MCPC client, CLI, and GUI are pure Swift.
+The bundled `test-server/` is the **only Python code** in the repository — a [FastMCP](https://github.com/modelcontextprotocol/python-sdk) server used for integration tests. The MCPC client, CLI, and GUI are pure Swift.
 
 | Capability | Name | Details |
 |------------|------|---------|
@@ -322,22 +347,74 @@ The bundled `test-server/` is the **only Python code** in the repository — a [
 | Resource | `test://time/{zone}` | Dynamic timestamp |
 | Prompt | `greet` | Args: `name`, optional `tone` |
 
-Run via: `uv run --directory test-server python server.py`
+Run via stdio (default):
 
-Integration script `scripts/test_swift_client.sh` validates all CLI operations against this server.
+```bash
+uv run --directory test-server python server.py
+```
 
-## 11. Non-functional requirements
+Run via SSE (for `make test-sse`):
+
+```bash
+uv run --directory test-server python server.py --transport sse --port 8765
+```
+
+## 11. Test suite specification
+
+### 11.1 Swift unit tests (`swift test`)
+
+| Target | Scope |
+|--------|-------|
+| `MCPCTests` | Config load/validation, `AppConfigWriter` round-trip, `MCPCLI` parsing, `CursorMCPConfigImporter`, `CursorMCPSync`, `SSEJSONMessageFilter` |
+| `MCPClientGUITests` | `JSONArgumentsParser`, `MCPAppModel` (config load, Cursor import), live-server integration (connect, catalog, call tool, ping) |
+
+Requires [uv](https://docs.astral.sh/uv/) for GUI integration tests that spawn the bundled test server.
+
+### 11.2 Integration scripts
+
+| Script | Validates |
+|--------|-----------|
+| `scripts/test_all.sh` | `swift test` + all integration scripts below |
+| `scripts/test_swift_client.sh` | CLI over stdio: all MCP commands |
+| `scripts/test_cli.sh` | CLI help, custom config, error paths |
+| `scripts/test_sse_client.sh` | CLI over SSE: ping, list-tools, call-tool |
+
+### 11.3 Makefile targets
+
+| Target | Action |
+|--------|--------|
+| `make test` / `make test-all` | Unit tests + CLI + SSE integration |
+| `make test-unit` | `swift test` only |
+| `make test-cli` | CLI integration scripts |
+| `make test-sse` | SSE integration script |
+
+## 12. Packaging specification
+
+### 12.1 App bundle (`make app`)
+
+`scripts/package_app.sh` builds release `mcpc-gui`, assembles `dist/MCPC.app` with `Info.plist`, and ad-hoc codesigns by default.
+
+Environment overrides: `APP_NAME`, `BUNDLE_ID`, `APP_VERSION`, `CODE_SIGN_IDENTITY`, `BUILD_CONFIG`.
+
+### 12.2 DMG (`make dmg`)
+
+`scripts/create_dmg.sh` packages `MCPC.app` into `dist/MCPC-<version>.dmg` with an Applications symlink, `config.toml.example`, and `README.txt`.
+
+Version is read from `[app].version` in `config.toml`.
+
+## 13. Non-functional requirements
 
 | Requirement | Target |
 |-------------|--------|
 | Concurrency | Swift 6 `Sendable` / actor isolation for session and line buffer |
 | Request timeout | Configurable, default 120s |
 | macOS version | 14.0 minimum |
-| Build | `swift build` produces all three products |
+| Build | `swift build` produces all library and executable products |
+| Tests | `make test` runs 38+ unit tests and integration scripts |
 
-## 12. Future extensions (not implemented)
+## 14. Future extensions (not implemented)
 
-- Config hot-reload without reconnect
+- SwiftUI / XCUITest GUI automation
 - Tool call history and saved argument presets
-- MCP notifications / server-initiated messages
+- MCP notifications / server-initiated messages in the GUI
 - Linux GUI or cross-platform packaging

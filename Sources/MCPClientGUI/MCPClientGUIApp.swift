@@ -7,6 +7,7 @@ import SwiftUI
 struct MCPClientGUIApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model = MCPAppModel()
+    @State private var isAboutPresented = false
 
     init() {
         MCPCLogging.bootstrap(with: .default)
@@ -19,6 +20,9 @@ struct MCPClientGUIApp: App {
         WindowGroup {
             ContentView(model: model)
                 .frame(minWidth: 900, minHeight: 600)
+                .sheet(isPresented: $isAboutPresented) {
+                    AboutView()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background {
                         Task { await model.shutdown() }
@@ -31,6 +35,11 @@ struct MCPClientGUIApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(AppMetadata.displayName)") {
+                    isAboutPresented = true
+                }
+            }
         }
     }
 }

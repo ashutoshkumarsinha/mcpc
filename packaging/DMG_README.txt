@@ -1,12 +1,12 @@
-MCPC — macOS MCP Client
-=========================
+MCP Client — macOS MCP Client
+==============================
 
 Install
 -------
-1. Drag MCPC.app to the Applications folder.
-2. Copy config.toml.example to a folder where you will run MCPC (for example ~/mcpc/config.toml).
+1. Drag MCP Client.app to the Applications folder.
+2. Copy config.toml.example to a folder where you will run MCP Client (for example ~/mcpc/config.toml).
 3. Edit config.toml with your MCP server definitions.
-4. Launch MCPC from Applications.
+4. Launch MCP Client from Applications.
 
 Configuration
 -------------

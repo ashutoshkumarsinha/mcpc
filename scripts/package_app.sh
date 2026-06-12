@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
-APP_NAME="${APP_NAME:-MCPC}"
+APP_NAME="${APP_NAME:-MCP Client}"
 BUNDLE_ID="${BUNDLE_ID:-com.mcpc.gui}"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 BINARY="$ROOT/.build/$BUILD_CONFIG/mcpc-gui"

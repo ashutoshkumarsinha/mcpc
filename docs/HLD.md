@@ -31,12 +31,14 @@ flowchart LR
 ┌─────────────────────────────────────────────────────────┐
 │  Presentation                                           │
 │  MCPClientCLI (main.swift)  │  MCPClientGUI (SwiftUI)  │
+│                             │  MCPClientGUICore (model)  │
 ├─────────────────────────────────────────────────────────┤
 │  Application / Session                                  │
 │  MCPClientSession (actor)                               │
 ├─────────────────────────────────────────────────────────┤
-│  Configuration & Transport                                │
-│  AppConfigLoader │ TransportFactory │ SubprocessStdio   │
+│  Configuration & Transport                              │
+│  AppConfigLoader │ MCPCLI │ TransportFactory │ Cursor*  │
+│  SubprocessStdio │ SSETransportAdapter                   │
 ├─────────────────────────────────────────────────────────┤
 │  Protocol (external)                                    │
 │  SwiftMCPClient — MCPClientConnection, MCPTransport     │
@@ -55,19 +57,27 @@ flowchart LR
 ```
 Package: mcpc
 ├── MCPC (library)
-│   ├── AppConfig.swift           Config models + TOML loader
+│   ├── AppConfig.swift / AppConfigLoader / AppConfigWriter
+│   ├── MCPCLI.swift              CLI argument parsing (testable)
+│   ├── MCPClientSession.swift    Public session API
 │   ├── TransportFactory.swift    Server → MCPTransport
 │   ├── SubprocessStdioTransport  Custom stdio implementation
+│   ├── SSETransportAdapter.swift FastMCP-compatible SSE wrapper
+│   ├── CursorMCPConfigImporter   Parse Cursor mcp.json
+│   ├── CursorMCPSync             Merge + hot-reload sync
+│   ├── MCPJSONFileWatcher        macOS FSEvents watch
 │   ├── LineBuffer.swift          Async line queue for receive()
-│   ├── ProcessEnvironment.swift  Subprocess env builder
-│   ├── ExecutableResolver.swift  PATH lookup
-│   └── MCPClientSession.swift    Public session API
-├── MCPClientCLI                  Thin CLI over MCPClientSession
-└── MCPClientGUI                  SwiftUI app over MCPClientSession
-    ├── MCPAppModel.swift         @Observable connection state
-    ├── ContentView.swift         Layout + sidebar
-    ├── ToolsView / ResourcesView / PromptsView
-    └── MCPClientLogging.swift    Log level bootstrap
+│   └── MCPCLogging.swift         swift-log bootstrap
+├── MCPClientGUICore (library)
+│   └── MCPAppModel.swift         @Observable model, JSON parsers
+├── MCPClientCLI                  Thin CLI over MCPClientSession + MCPCLI
+├── MCPClientGUI                  SwiftUI views over MCPClientGUICore
+│   ├── ContentView / ImportCursorServersSheet
+│   └── ToolsView / ResourcesView / PromptsView
+├── Tests/
+│   ├── MCPCTests                 Unit tests for MCPC
+│   └── MCPClientGUITests         Unit + integration tests for GUI core
+└── packaging/ + scripts/         DMG templates, test runners
 ```
 
 ## 4. Configuration flow
@@ -210,12 +220,14 @@ SwiftMCPClient owns JSON-RPC encoding, request/response correlation, and timeout
 
 ## 8. CLI architecture
 
-The CLI is a single-file command router:
+The CLI executable is a thin router over shared library code:
 
-1. `parseArguments` → `CLIOptions` (config path, server name, command)
+1. `MCPCLI.parseArguments` → `MCPCLIOptions` (config path, server name, command)
 2. `list-servers` short-circuits without opening a session
-3. All other commands: `MCPClientSession.connect` → execute → `defer { disconnect }`
+3. All other commands: `MCPClientSession` → execute → `await disconnect()`
 4. Formatters (`MCPToolContentFormatter`, `MCPResourceContentFormatter`) convert MCP content types to plain text
+
+`MCPCLI` lives in **MCPC** so argument parsing is covered by `MCPCTests` without subprocess spawning.
 
 No persistent state between invocations — each run is an isolated session.
 
@@ -224,29 +236,49 @@ No persistent state between invocations — each run is an isolated session.
 ### 9.1 MV pattern with Observation
 
 ```
-MCPClientGUIApp
-    └── ContentView
-            ├── SidebarView        (config + server list)
+MCPClientGUIApp (executable)
+    └── ContentView + ImportCursorServersSheet
+            ├── SidebarView        (config + servers + Cursor import)
             ├── ConnectionBar      (connect / ping / status)
-            ├── TabView
-            │     ├── ToolsView
-            │     ├── ResourcesView
-            │     └── PromptsView
+            ├── TabView            (Tools / Resources / Prompts)
             └── OutputPanel
 
-MCPAppModel (@MainActor @Observable)
-    ├── UI state (connection, catalogs, selections, output)
-    ├── session: MCPClientSession?
-    └── async operations via Task { }
+MCPClientGUICore
+    └── MCPAppModel (@MainActor @Observable)
+            ├── UI state (connection, catalogs, selections, output)
+            ├── session: MCPClientSession?
+            ├── MCPJSONFileWatcher (via MCPC)
+            └── async operations via Task { }
 ```
 
-`MCPAppModel` is the single source of truth. Views bind with `@Bindable` and call model methods; the model spawns `Task` blocks for async MCP work and updates observable properties on the main actor.
+`MCPAppModel` is the single source of truth. SwiftUI views in `MCPClientGUI` import `MCPClientGUICore` and bind with `@Bindable`. The model spawns `Task` blocks for async MCP work and updates observable properties on the main actor.
 
 ### 9.2 JSON argument editing
 
-`JSONArgumentsParser` generates starter JSON from tool `inputSchema` properties or prompt argument names. User edits in `TextEditor`, then the model decodes to `[String: AnyCodableValue]` or `[String: String]` before calling the session.
+`JSONArgumentsParser` (in `MCPClientGUICore`) generates starter JSON from tool `inputSchema` properties or prompt argument names. User edits in `TextEditor`, then the model decodes to `[String: AnyCodableValue]` or `[String: String]` before calling the session.
 
-### 9.3 App lifecycle
+### 9.3 Cursor sync flow
+
+```mermaid
+sequenceDiagram
+    participant GUI as MCPAppModel
+    participant Watcher as MCPJSONFileWatcher
+    participant Sync as CursorMCPSync
+    participant Writer as AppConfigWriter
+    participant Config as config.toml
+
+    GUI->>Watcher: setWatchURLs (if hot reload on)
+    Watcher-->>GUI: file changed
+    GUI->>Sync: sync(json, into: config)
+    Sync-->>GUI: added/updated/removed
+    GUI->>Writer: save(result.config)
+    Writer->>Config: write
+    GUI->>GUI: reloadConfig / disconnect if connected server changed
+```
+
+Manual import uses the same `CursorMCPSync` path via `ImportCursorServersSheet`.
+
+### 9.4 App lifecycle
 
 `MCPClientGUIApp` configures swift-log (suppress `MCPClient` warnings) and calls `model.shutdown()` on:
 
@@ -290,6 +322,8 @@ flowchart LR
 flowchart LR
     MCPC --> SwiftMCPClient
     MCPC --> TOMLKit
+    MCPClientGUI --> MCPClientGUICore
+    MCPClientGUICore --> MCPC
     MCPClientGUI --> swift-log
     SwiftMCPClient --> AsyncHTTPClient
     SwiftMCPClient --> NIO
@@ -299,20 +333,50 @@ flowchart LR
 |------------|--------------|
 | SwiftMCPClient | MCP protocol, HTTP/SSE/WS transports, connection actor |
 | TOMLKit | Parse `config.toml` into Swift structs |
-| swift-log | GUI log bootstrap only |
+| swift-log | Structured logging for MCPC and GUI |
 
 ## 12. Test architecture
 
-```
-scripts/test_swift_client.sh
-    └── mcpc (debug build)
-            └── config.toml → test-server
-                    └── uv run test-server/server.py (FastMCP stdio)
+```mermaid
+flowchart TB
+    Make["make test"]
+    Unit["swift test"]
+    CLI["test_swift_client.sh + test_cli.sh"]
+    SSE["test_sse_client.sh"]
+    Server["test-server (FastMCP)"]
+
+    Make --> Unit
+    Make --> CLI
+    Make --> SSE
+    Unit --> MCPCTests["MCPCTests (config, CLI, Cursor, SSE filter)"]
+    Unit --> GUITests["MCPClientGUITests (model + live server)"]
+    CLI --> Server
+    SSE --> Server
+    GUITests --> Server
 ```
 
-The test server is intentionally minimal: three tools, two resources, one prompt. It validates end-to-end stdio transport, handshake, and all CLI commands without external services.
+| Layer | Coverage |
+|-------|----------|
+| **MCPCTests** | Config validation, `MCPCLI` parsing, Cursor import/sync, `AppConfigWriter`, SSE JSON filter |
+| **MCPClientGUITests** | `JSONArgumentsParser`, `MCPAppModel` unit tests, connect/call-tool/ping integration |
+| **Shell scripts** | End-to-end CLI over stdio and SSE against the bundled test server |
 
-## 13. Security considerations
+The test server supports `--transport stdio` (default) and `--transport sse`. Integration tests require **uv** to spawn the Python server.
+
+## 13. Packaging architecture
+
+```
+make dmg
+    └── scripts/create_dmg.sh
+            └── scripts/package_app.sh
+                    └── swift build -c release --product mcpc-gui
+                    └── dist/MCPC.app (Info.plist + codesign)
+                    └── dist/MCPC-<version>.dmg (hdiutil)
+```
+
+DMG staging includes `Applications` symlink, `config.toml.example`, and install README. Version comes from `[app].version` in `config.toml`.
+
+## 14. Security considerations
 
 | Area | Approach |
 |------|----------|
@@ -321,7 +385,7 @@ The test server is intentionally minimal: three tools, two resources, one prompt
 | TLS | `trust_self_signed_certificates` opt-in for dev only |
 | Network | Remote transports connect only to configured URLs |
 
-## 14. Key design decisions
+## 15. Key design decisions
 
 | Decision | Rationale |
 |----------|-----------|
@@ -331,9 +395,13 @@ The test server is intentionally minimal: three tools, two resources, one prompt
 | Actor for `MCPClientSession` | Safe concurrent access from GUI tasks |
 | Stateless CLI | Simple scripting; no daemon to manage |
 | Library extraction (`MCPC`) | Shared logic between CLI and GUI |
+| `MCPClientGUICore` split | Testable GUI model without SwiftUI executable dependency |
+| `MCPCLI` in library | Unit-testable argument parsing |
+| `SSETransportAdapter` | Filter non-JSON POST ack bodies (FastMCP `202 Accepted`) |
 | Minimal subprocess env | Predictable stdio subprocess behavior; per-server `env` in config |
+| `MCPJSONFileWatcher` sync deinit | Avoid async `stop()` race on deallocation |
 
-## 15. Extension points
+## 16. Extension points
 
 Future work can hook in at these boundaries without rewriting the stack:
 
@@ -342,7 +410,7 @@ Future work can hook in at these boundaries without rewriting the stack:
 - **Alternate UIs** — reuse session + config, replace SwiftUI layer
 - **Config sources** — wrap or replace `AppConfigLoader` (e.g. remote config service)
 
-## 16. Related documents
+## 17. Related documents
 
 - [README.md](../README.md) — project overview and quick start
 - [SPEC.md](SPEC.md) — detailed behavioral specification

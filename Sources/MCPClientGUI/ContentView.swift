@@ -30,7 +30,7 @@ struct ContentView: View {
                 OutputPanel(model: model)
             }
         }
-        .navigationTitle("MCPC")
+        .navigationTitle(AppMetadata.displayName)
         .sheet(isPresented: $model.isImportCursorSheetPresented) {
             ImportCursorServersSheet(model: model)
         }

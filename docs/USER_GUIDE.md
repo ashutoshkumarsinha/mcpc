@@ -61,6 +61,35 @@ APP_NAME=MCPC BUNDLE_ID=com.example.mcpc CODE_SIGN_IDENTITY="-" make dmg
 
 Use `make app` to build only the `.app` bundle without creating a DMG.
 
+### Install CLI binaries to PATH
+
+```bash
+make install
+# Installs .build/release/mcpc and mcpc-gui to $(PREFIX)/bin (default /usr/local/bin)
+```
+
+## Testing
+
+MCPC includes Swift unit tests and shell integration tests against the bundled test server.
+
+| Command | What it runs |
+|---------|--------------|
+| `make test` | Everything: `swift test` + CLI stdio + CLI errors + SSE |
+| `make test-unit` | Swift unit tests only (`MCPCTests`, `MCPClientGUITests`) |
+| `make test-cli` | CLI integration scripts (`test_swift_client.sh`, `test_cli.sh`) |
+| `make test-sse` | SSE transport integration (`test_sse_client.sh`) |
+
+**Prerequisite:** [uv](https://docs.astral.sh/uv/) for integration tests and GUI live-server tests.
+
+```bash
+make test
+# or run scripts directly:
+./scripts/test_all.sh
+swift test
+```
+
+Unit tests cover config validation, CLI argument parsing, Cursor `mcp.json` import/sync, SSE message filtering, and GUI model operations (including connect → call tool → disconnect against the test server).
+
 ## Configuration
 
 ### Config file location
@@ -140,6 +169,15 @@ Authorization = "Bearer YOUR_TOKEN_HERE"
 
 `http_sse` is accepted as an alias for `sse`. FastMCP and similar servers that return `202 Accepted` with a plain-text body are supported.
 
+### Adding a Streamable HTTP server
+
+```toml
+[[servers]]
+name = "remote-streamable"
+transport = "streamable_http"
+url = "http://127.0.0.1:8080/mcp"
+```
+
 ### Adding a WebSocket server
 
 ```toml
@@ -157,6 +195,9 @@ url = "wss://example.com/mcp/ws"
 | `protocol_version` | MCP protocol version for the handshake |
 | `request_timeout_seconds` | How long to wait for a server response |
 | `log_server_stderr` | Print subprocess stderr (useful for debugging stdio servers) |
+| `mcp_json_hot_reload` | Sync Cursor `mcp.json` into `config.toml` when the file changes (GUI) |
+| `mcp_json_watch_paths` | Override which `mcp.json` files to watch |
+| `mcp_json_synced_servers` | Names of servers managed by Cursor sync (auto-maintained) |
 
 ### Logging settings
 
@@ -289,6 +330,19 @@ swift run mcpc-gui
 
 While connected, use the **Ping** button to verify the server is responsive.
 
+### Import Cursor servers
+
+1. Click **Import from Cursor…** in the sidebar.
+2. Paste JSON, load a file, or use `~/.cursor/mcp.json`.
+3. Preview imported servers and choose **Skip existing** or **Replace existing** on name conflicts.
+4. Imported servers are written to the active `config.toml`.
+
+### Cursor hot reload
+
+When `mcp_json_hot_reload = true` (default in the project `config.toml`), the GUI watches `~/.cursor/mcp.json` and `.cursor/mcp.json` next to your config file. Changes are merged into `config.toml` automatically. Toggle the feature from the sidebar; manually added servers are preserved unless they share a name with a synced server.
+
+If you are connected and a synced server's definition changes, the GUI disconnects and asks you to reconnect.
+
 ### Keyboard shortcuts
 
 | Shortcut | Action |
@@ -317,10 +371,18 @@ Capabilities:
 | Resource | `test://time/utc` | UTC timestamp |
 | Prompt | `greet` | `--name Swift` |
 
-Run the full integration test:
+Run the full test suite:
 
 ```bash
-./scripts/test_swift_client.sh
+make test
+```
+
+Or individual integration scripts:
+
+```bash
+./scripts/test_swift_client.sh   # CLI over stdio
+./scripts/test_cli.sh            # CLI help and error paths
+./scripts/test_sse_client.sh     # CLI over SSE
 ```
 
 ## Troubleshooting
@@ -378,6 +440,8 @@ Use with caution in production.
 - Keep one `config.toml` per project, or use `MCPC_CONFIG` in shell profiles.
 - Use `config.local.toml` (gitignored) for machine-specific paths and secrets.
 - Prefer `mcpc` in scripts and CI; use `mcpc-gui` for exploratory debugging.
+- Run `make test` before committing changes that touch config, transports, or the GUI model.
+- Distribute the GUI with `make dmg`; share `dist/MCPC-<version>.dmg`.
 - After changing server code, disconnect and reconnect (or restart the CLI) to pick up changes.
 
 ## Further reading

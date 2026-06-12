@@ -2,11 +2,12 @@
 
 A pure Swift macOS [Model Context Protocol (MCP)](https://modelcontextprotocol.io) client. MCPC connects to MCP servers configured in `config.toml` over stdio, HTTP/SSE, or WebSocket transports. The only Python in this repository is the optional bundled `test-server/` used for integration tests.
 
-It ships as three products:
+It ships as libraries and executables:
 
 | Product | Description |
 |---------|-------------|
-| **`MCPC`** | Swift library for embedding MCP client sessions in your own apps |
+| **`MCPC`** | Core library: config, transports, session, CLI parsing, Cursor sync |
+| **`MCPClientGUICore`** | GUI model and JSON argument helpers (testable without SwiftUI) |
 | **`mcpc`** | Command-line client for scripting and automation |
 | **`mcpc-gui`** | macOS SwiftUI app for interactive exploration |
 
@@ -87,6 +88,18 @@ mcpc get-prompt <name> [--key value ...]
 
 Use `-s <name>` to select a server, or rely on `client.default_server`.
 
+## Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Debug build of all products |
+| `make test` | Unit tests + CLI + SSE integration |
+| `make test-unit` | `swift test` only |
+| `make gui` | Launch `mcpc-gui` |
+| `make app` | Build `dist/MCPC.app` (release) |
+| `make dmg` | Build distributable DMG installer |
+| `make install` | Install CLI and GUI to `$(PREFIX)/bin` |
+
 ## Project layout
 
 ```
@@ -94,9 +107,10 @@ mcpc/
 ├── config.toml              # Client and server configuration
 ├── Package.swift            # Swift package manifest
 ├── Sources/
-│   ├── MCPC/                # Core library (config, transports, session)
+│   ├── MCPC/                # Core library (config, transports, session, MCPCLI)
+│   ├── MCPClientGUICore/    # GUI model (MCPAppModel)
 │   ├── MCPClientCLI/        # mcpc CLI
-│   └── MCPClientGUI/        # mcpc-gui SwiftUI app
+│   └── MCPClientGUI/        # mcpc-gui SwiftUI views
 ├── test-server/             # Python FastMCP server for integration tests
 ├── packaging/               # App bundle templates and DMG extras
 ├── Tests/
@@ -120,9 +134,9 @@ mcpc/
 
 | Document | Audience | Contents |
 |----------|----------|----------|
-| [docs/SPEC.md](docs/SPEC.md) | Implementers | Config schema, MCP coverage, CLI/GUI behavior, error model |
-| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Users | Installation, configuration, CLI and GUI walkthrough, troubleshooting |
-| [docs/HLD.md](docs/HLD.md) | Architects | Component diagram, data flow, transport design, concurrency model |
+| [docs/SPEC.md](docs/SPEC.md) | Implementers | Config schema, MCP coverage, tests, packaging, error model |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Users | Installation, testing, configuration, CLI/GUI, troubleshooting |
+| [docs/HLD.md](docs/HLD.md) | Architects | Component diagram, data flow, transports, test and packaging design |
 
 ## Dependencies
 
