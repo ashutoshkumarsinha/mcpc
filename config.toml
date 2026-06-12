@@ -10,6 +10,10 @@ default_server = "test-server"
 protocol_version = "2024-11-05"
 request_timeout_seconds = 120
 log_server_stderr = false
+# Sync servers from Cursor mcp.json into config.toml when the file changes (GUI).
+mcp_json_hot_reload = true
+# Optional override; defaults to ~/.cursor/mcp.json and .cursor/mcp.json
+# mcp_json_watch_paths = ["~/.cursor/mcp.json", ".cursor/mcp.json"]
 
 [logging]
 # Global log level: trace | debug | info | notice | warning | error | critical | none
@@ -23,7 +27,7 @@ mcpc = "info"
 MCPClient = "warning"
 
 # --- MCP servers -----------------------------------------------------------
-# transport: "stdio" | "http_sse" | "websocket"
+# transport: "stdio" | "sse" | "streamable_http" | "websocket"
 
 # Bundled integration-test server (Python — see test-server/). Requires uv for `make test`.
 [[servers]]
@@ -33,12 +37,21 @@ command = "uv"
 args = ["run", "--directory", "test-server", "python", "server.py"]
 env = { PYTHONUNBUFFERED = "1" }
 
-# Example remote server (uncomment and set URL to use):
+# Example SSE server (MCP 2024-11-05 — GET /sse stream + POST message endpoint):
 # [[servers]]
-# name = "remote-example"
-# transport = "http_sse"
-# url = "http://127.0.0.1:8080/sse"
+# name = "remote-sse"
+# transport = "sse"
+# url = "http://127.0.0.1:8765/sse"
 # trust_self_signed_certificates = false
+# connection_timeout_seconds = 30
+# max_reconnect_attempts = 3
+# reconnect_base_delay_seconds = 1.0
 #
-# [servers.remote-example.headers]
+# [servers.remote-sse.headers]
 # Authorization = "Bearer your-token"
+#
+# Example Streamable HTTP server (MCP 2025-03-26 — single /mcp endpoint):
+# [[servers]]
+# name = "remote-streamable"
+# transport = "streamable_http"
+# url = "http://127.0.0.1:8080/mcp"

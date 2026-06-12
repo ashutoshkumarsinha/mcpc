@@ -13,7 +13,7 @@ public enum TransportFactory {
             "Creating transport",
             metadata: [
                 "server": .string(server.name),
-                "transport": .string(server.transport.rawValue),
+                "transport": .string(server.transport.configKey),
             ]
         )
         switch server.transport {
@@ -31,22 +31,56 @@ public enum TransportFactory {
                 command: ExecutableResolver.resolve(command, environment: environment),
                 arguments: server.args,
                 environment: environment,
+                workingDirectory: server.workingDirectory,
                 logStderr: client.logServerStderr
             )
 
-        case .httpSSE:
+        case .sse:
             guard let urlString = server.url, let url = URL(string: urlString) else {
                 throw AppConfigError.invalidServer(
                     name: server.name,
-                    reason: "http_sse transport requires a valid 'url'"
+                    reason: "sse transport requires a valid 'url' (SSE GET endpoint)"
                 )
             }
 
-            return HTTPSSETransport(
+            log.info(
+                "Configuring SSE transport",
+                metadata: [
+                    "server": .string(server.name),
+                    "url": .string(url.absoluteString),
+                    "max_reconnect_attempts": .stringConvertible(server.maxReconnectAttempts),
+                ]
+            )
+
+            return SSETransportAdapter(
                 url: url,
                 headers: server.headers,
                 connectionTimeout: TimeInterval(server.connectionTimeoutSeconds),
                 maxReconnectAttempts: server.maxReconnectAttempts,
+                reconnectBaseDelay: server.reconnectBaseDelaySeconds,
+                trustSelfSignedCertificates: server.trustSelfSignedCertificates
+            )
+
+        case .streamableHTTP:
+            guard let urlString = server.url, let url = URL(string: urlString) else {
+                throw AppConfigError.invalidServer(
+                    name: server.name,
+                    reason: "streamable_http transport requires a valid 'url' (MCP POST endpoint)"
+                )
+            }
+
+            log.info(
+                "Configuring Streamable HTTP transport",
+                metadata: [
+                    "server": .string(server.name),
+                    "url": .string(url.absoluteString),
+                ]
+            )
+
+            return StreamableHTTPTransport(
+                url: url,
+                headers: server.headers,
+                connectionTimeout: TimeInterval(server.connectionTimeoutSeconds),
                 trustSelfSignedCertificates: server.trustSelfSignedCertificates
             )
 

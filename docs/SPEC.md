@@ -15,7 +15,7 @@ This document defines functional requirements, configuration schema, supported M
 ### In scope
 
 - MCP protocol version `2024-11-05` (configurable via `client.protocol_version`)
-- Transports: **stdio**, **http_sse**, **websocket**
+- Transports: **stdio**, **sse**, **streamable_http**, **websocket** (`http_sse` accepted as alias for `sse`)
 - MCP operations: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`
 - TOML-based multi-server configuration
 - CLI with structured exit codes
@@ -89,22 +89,26 @@ Each table defines one named MCP server.
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `name` | string | yes | Unique server identifier |
-| `transport` | enum | yes | `stdio`, `http_sse`, or `websocket` |
+| `transport` | enum | yes | `stdio`, `sse`, `streamable_http`, or `websocket` |
 | `command` | string | stdio | Executable to spawn |
 | `args` | string array | no | Command-line arguments |
 | `env` | string map | no | Extra environment variables for subprocess |
-| `url` | string | http_sse, websocket | Endpoint URL |
+| `working_directory` | string | no | Subprocess cwd (stdio only) |
+| `url` | string | sse, streamable_http, websocket | Endpoint URL |
 | `headers` | string map | no | HTTP headers for remote transports |
 | `trust_self_signed_certificates` | boolean | no | TLS trust override (default `false`) |
 | `connection_timeout_seconds` | integer | no | Connect timeout for HTTP/SSE (default `30`) |
 | `max_reconnect_attempts` | integer | no | SSE reconnect attempts (default `3`) |
+| `reconnect_base_delay_seconds` | number | no | SSE reconnect backoff base in seconds (default `1.0`) |
 
 Server names must be unique. Each server entry is validated at load time.
 
 #### Transport validation rules
 
 - **stdio:** `command` must be non-empty
-- **http_sse / websocket:** `url` must be non-empty and parseable as a URL
+- **sse:** `url` must be the SSE GET endpoint (e.g. `http://host/sse`)
+- **streamable_http:** `url` must be the MCP POST endpoint (e.g. `http://host/mcp`)
+- **websocket:** `url` must be non-empty and parseable as a URL
 
 ### 4.3 Example: stdio server (Swift binary)
 
@@ -127,17 +131,29 @@ args = ["run", "--directory", "/path/to/project", "python", "mcp_server.py"]
 env = { PYTHONUNBUFFERED = "1" }
 ```
 
-### 4.5 Example: HTTP/SSE server
+### 4.5 Example: SSE server (MCP 2024-11-05)
 
 ```toml
 [[servers]]
 name = "remote-sse"
-transport = "http_sse"
+transport = "sse"
 url = "http://127.0.0.1:8080/sse"
 trust_self_signed_certificates = false
+connection_timeout_seconds = 30
+max_reconnect_attempts = 3
+reconnect_base_delay_seconds = 1.0
 
 [servers.remote-sse.headers]
 Authorization = "Bearer <token>"
+```
+
+### 4.6 Example: Streamable HTTP server (MCP 2025-03-26)
+
+```toml
+[[servers]]
+name = "remote-streamable"
+transport = "streamable_http"
+url = "http://127.0.0.1:8080/mcp"
 ```
 
 ## 5. MCP protocol coverage
@@ -257,11 +273,17 @@ Argument editors are pre-filled from tool `inputSchema` or prompt argument defin
 
 Design constraint: `send` and `receive` must not block each other (prior actor-based design caused deadlock).
 
-### 8.2 http_sse (`HTTPSSETransport`)
+### 8.2 sse (`SSETransportAdapter` → `HTTPSSETransport`)
 
-Provided by SwiftMCPClient. Supports headers, connection timeout, reconnect attempts, and self-signed certificate trust.
+MCPC wraps SwiftMCPClient's `HTTPSSETransport` with `SSETransportAdapter` to support servers (e.g. FastMCP) that acknowledge POST requests with `202 Accepted` and a non-JSON body (`Accepted`) while delivering JSON-RPC responses on SSE `message` events.
 
-### 8.3 websocket (`WebSocketTransport`)
+Supports headers, connection timeout, reconnect attempts, reconnect backoff, and self-signed certificate trust.
+
+### 8.3 streamable_http (`StreamableHTTPTransport`)
+
+Provided by SwiftMCPClient. Single-endpoint HTTP transport for MCP 2025-03-26.
+
+### 8.4 websocket (`WebSocketTransport`)
 
 Provided by SwiftMCPClient. Supports headers and self-signed certificate trust.
 

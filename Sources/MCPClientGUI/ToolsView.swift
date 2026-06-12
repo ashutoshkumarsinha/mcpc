@@ -1,5 +1,6 @@
-import SwiftUI
 import MCPClient
+import MCPClientGUICore
+import SwiftUI
 
 struct ToolsView: View {
     @Bindable var model: MCPAppModel

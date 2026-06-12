@@ -1,0 +1,33 @@
+# Example MCPC configuration — copy to the directory where you launch MCPC
+# (or set MCPC_CONFIG to an absolute path).
+
+[app]
+name = "mcpc"
+version = "1.0.0"
+
+[client]
+default_server = "my-server"
+protocol_version = "2024-11-05"
+request_timeout_seconds = 120
+log_server_stderr = false
+mcp_json_hot_reload = true
+
+[logging]
+level = "info"
+destination = "stderr"
+
+[logging.components]
+MCPClient = "warning"
+
+# --- MCP servers -----------------------------------------------------------
+
+[[servers]]
+name = "my-server"
+transport = "stdio"
+command = "/path/to/mcp-server"
+args = []
+
+# [[servers]]
+# name = "remote-sse"
+# transport = "sse"
+# url = "https://example.com/mcp/sse"

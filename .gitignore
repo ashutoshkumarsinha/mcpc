@@ -1,5 +1,6 @@
 # Swift Package Manager
 .build/
+dist/
 .swiftpm/
 *.xcodeproj
 xcuserdata/

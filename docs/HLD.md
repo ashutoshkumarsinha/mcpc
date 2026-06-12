@@ -128,7 +128,8 @@ stateDiagram-v2
 | Transport | Implementation | Source |
 |-----------|----------------|--------|
 | `stdio` | `SubprocessStdioTransport` | MCPC (custom) |
-| `http_sse` | `HTTPSSETransport` | SwiftMCPClient |
+| `sse` | `SSETransportAdapter` → `HTTPSSETransport` | MCPC + SwiftMCPClient |
+| `streamable_http` | `StreamableHTTPTransport` | SwiftMCPClient |
 | `websocket` | `WebSocketTransport` | SwiftMCPClient |
 
 ### 6.2 Stdio transport (critical path)

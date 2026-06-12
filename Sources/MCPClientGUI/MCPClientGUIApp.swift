@@ -1,5 +1,6 @@
 import AppKit
 import MCPC
+import MCPClientGUICore
 import SwiftUI
 
 @main
@@ -24,6 +25,7 @@ struct MCPClientGUIApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    model.stopMCPJSONWatching()
                     Task { await model.shutdown() }
                 }
         }

@@ -30,11 +30,14 @@ swift run mcpc ping
 swift run mcpc list-tools
 swift run mcpc call-tool echo --message "hello"
 
-# Run integration tests (requires uv)
+# Run all tests: unit tests + CLI + SSE integration (requires uv)
 make test
 
 # Launch the GUI
 ./scripts/run_gui.sh
+
+# Build a distributable DMG (release MCPC.app + installer image in dist/)
+make dmg
 ```
 
 Run commands from the project root so relative paths in `config.toml` (for example `test-server/`) resolve correctly.
@@ -95,9 +98,18 @@ mcpc/
 │   ├── MCPClientCLI/        # mcpc CLI
 │   └── MCPClientGUI/        # mcpc-gui SwiftUI app
 ├── test-server/             # Python FastMCP server for integration tests
+├── packaging/               # App bundle templates and DMG extras
+├── Tests/
+│   ├── MCPCTests/           # Config, CLI parser, Cursor import/sync unit tests
+│   └── MCPClientGUITests/   # GUI model + live-server integration tests
 ├── scripts/
+│   ├── test_all.sh
 │   ├── test_swift_client.sh
-│   └── run_gui.sh
+│   ├── test_cli.sh
+│   ├── test_sse_client.sh
+│   ├── run_gui.sh
+│   ├── package_app.sh
+│   └── create_dmg.sh
 └── docs/
     ├── SPEC.md              # Technical specification
     ├── USER_GUIDE.md        # End-user documentation

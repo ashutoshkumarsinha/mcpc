@@ -3,20 +3,20 @@ import MCPC
 import MCPClient
 import Observation
 
-enum ConnectionState: Equatable {
+public enum ConnectionState: Equatable {
     case disconnected
     case connecting
     case connected
 }
 
-enum MCPTab: String, CaseIterable, Identifiable {
+public enum MCPTab: String, CaseIterable, Identifiable {
     case tools
     case resources
     case prompts
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
-    var title: String {
+    public var title: String {
         switch self {
         case .tools: return "Tools"
         case .resources: return "Resources"
@@ -27,41 +27,89 @@ enum MCPTab: String, CaseIterable, Identifiable {
 
 @MainActor
 @Observable
-final class MCPAppModel {
-    var configURL: URL
-    var config: AppConfig?
-    var selectedServerName: String?
-    var connectionState: ConnectionState = .disconnected
-    var connectedServerTitle: String?
-    var selectedTab: MCPTab = .tools
+public final class MCPAppModel {
+    public var configURL: URL
+    public var config: AppConfig?
+    public var selectedServerName: String?
+    public var connectionState: ConnectionState = .disconnected
+    public var connectedServerTitle: String?
+    public var selectedTab: MCPTab = .tools
 
-    var tools: [MCPTool] = []
-    var resources: [MCPResource] = []
-    var prompts: [MCPPrompt] = []
+    public var tools: [MCPTool] = []
+    public var resources: [MCPResource] = []
+    public var prompts: [MCPPrompt] = []
 
-    var selectedToolName: String?
-    var toolArgumentsJSON: String = "{}"
-    var selectedResourceURI: String?
-    var selectedPromptName: String?
-    var promptArgumentsJSON: String = "{}"
+    public var selectedToolName: String?
+    public var toolArgumentsJSON: String = "{}"
+    public var selectedResourceURI: String?
+    public var selectedPromptName: String?
+    public var promptArgumentsJSON: String = "{}"
 
-    var output: String = ""
-    var statusMessage: String?
-    var errorMessage: String?
-    var isBusy = false
+    public var output: String = ""
+    public var statusMessage: String?
+    public var errorMessage: String?
+    public var isBusy = false
+    public var isImportCursorSheetPresented = false
+    public var mcpJSONWatchStatus: String?
 
     private var session: MCPClientSession?
+    private let mcpJSONWatcher = MCPJSONFileWatcher()
+    private var isApplyingMCPJSONSync = false
 
-    init() {
+    public init(loadDefaultConfiguration: Bool = true) {
         configURL = MCPAppModel.defaultConfigURL()
-        loadConfig()
+        if loadDefaultConfiguration {
+            loadConfig()
+        }
     }
 
-    static func defaultConfigURL() -> URL {
+    public static func defaultConfigURL() -> URL {
         AppConfigLoader.defaultConfigURL()
     }
 
-    func loadConfig(from url: URL? = nil) {
+    public func importCursorServers(
+        json: String,
+        conflictPolicy: MergeConflictPolicy
+    ) throws -> String {
+        let base = config ?? AppConfig(
+            app: AppSettings(),
+            client: ClientSettings(),
+            servers: []
+        )
+
+        let result = try CursorMCPSync.sync(
+            json: json,
+            into: base,
+            managedServerNames: base.client.mcpJSONSyncedServers,
+            onConflict: conflictPolicy
+        )
+
+        try AppConfigWriter.save(result.config, to: configURL)
+        loadConfig(performInitialMCPSync: false)
+        restartMCPJSONHotReloadIfNeeded(performInitialSync: false)
+
+        var parts = ["Added \(result.added.count) server(s) to \(configURL.lastPathComponent)."]
+        if !result.updated.isEmpty {
+            parts.append("Updated \(result.updated.count).")
+        }
+        if !result.preview.warnings.isEmpty {
+            parts.append("\(result.preview.warnings.count) warning(s).")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    public func setMCPJSONHotReload(_ enabled: Bool) {
+        guard var current = config else { return }
+        current.client.mcpJSONHotReload = enabled
+        do {
+            try AppConfigWriter.save(current, to: configURL)
+            loadConfig(performInitialMCPSync: enabled)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    public func loadConfig(from url: URL? = nil, performInitialMCPSync: Bool = true) {
         if let url {
             configURL = url
         }
@@ -82,9 +130,109 @@ final class MCPAppModel {
             config = nil
             errorMessage = String(describing: error)
         }
+
+        restartMCPJSONHotReloadIfNeeded(performInitialSync: performInitialMCPSync)
     }
 
-    func connect() {
+    public func restartMCPJSONHotReloadIfNeeded(performInitialSync: Bool) {
+        mcpJSONWatcher.stop()
+
+        guard let config, config.client.mcpJSONHotReload else {
+            mcpJSONWatchStatus = nil
+            return
+        }
+
+        let urls = CursorMCPPaths.resolvedWatchURLs(
+            configuredPaths: config.client.mcpJSONWatchPaths,
+            configURL: configURL
+        )
+        let labels = urls.map { url in
+            if url.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path) {
+                return "~" + url.path.dropFirst(FileManager.default.homeDirectoryForCurrentUser.path.count)
+            }
+            return url.lastPathComponent == "mcp.json"
+                ? url.deletingLastPathComponent().lastPathComponent + "/mcp.json"
+                : url.lastPathComponent
+        }
+        mcpJSONWatchStatus = labels.joined(separator: ", ")
+
+        mcpJSONWatcher.setWatchURLs(urls) { [weak self] changedURL in
+            Task { @MainActor in
+                self?.applyMCPJSONFile(at: changedURL)
+            }
+        }
+
+        if performInitialSync {
+            Task { @MainActor in
+                for url in urls where FileManager.default.fileExists(atPath: url.path) {
+                    await self.applyMCPJSONFileSync(at: url)
+                }
+            }
+        }
+    }
+
+    public func applyMCPJSONFile(at url: URL) {
+        Task { @MainActor in
+            await applyMCPJSONFileSync(at: url)
+        }
+    }
+
+    private func applyMCPJSONFileSync(at url: URL) async {
+        guard !isApplyingMCPJSONSync else { return }
+        guard config?.client.mcpJSONHotReload == true else { return }
+        guard let json = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let current = config else { return }
+
+        isApplyingMCPJSONSync = true
+        defer { isApplyingMCPJSONSync = false }
+
+        do {
+                let connectedName = selectedServerName
+                let previousConnectedConfig = connectedName.flatMap { name in
+                    current.servers.first(where: { $0.name == name })
+                }
+
+                let result = try CursorMCPSync.sync(
+                    json: json,
+                    into: current,
+                    managedServerNames: current.client.mcpJSONSyncedServers,
+                    onConflict: .replace
+                )
+
+                if result.added.isEmpty && result.updated.isEmpty && result.removed.isEmpty {
+                    return
+                }
+
+                try AppConfigWriter.save(result.config, to: configURL)
+                loadConfig(performInitialMCPSync: false)
+
+                var parts: [String] = []
+                if !result.added.isEmpty {
+                    parts.append("added \(result.added.joined(separator: ", "))")
+                }
+                if !result.updated.isEmpty {
+                    parts.append("updated \(result.updated.joined(separator: ", "))")
+                }
+                if !result.removed.isEmpty {
+                    parts.append("removed \(result.removed.joined(separator: ", "))")
+                }
+                statusMessage = "Reloaded \(url.lastPathComponent): \(parts.joined(separator: "; "))"
+                errorMessage = nil
+
+                if let connectedName,
+                   let previousConnectedConfig,
+                   let nextConnectedConfig = config?.servers.first(where: { $0.name == connectedName }),
+                   previousConnectedConfig != nextConnectedConfig,
+                   connectionState == .connected {
+                    await shutdown()
+                    statusMessage? += " — reconnect to apply changes to \(connectedName)."
+                }
+        } catch {
+            errorMessage = "mcp.json reload failed: \(error.localizedDescription)"
+        }
+    }
+
+    public func connect() {
         guard connectionState != .connecting else { return }
         guard let serverName = selectedServerName, !serverName.isEmpty else {
             errorMessage = "Select a server to connect."
@@ -127,14 +275,14 @@ final class MCPAppModel {
         }
     }
 
-    func disconnect() {
+    public func disconnect() {
         Task {
             await shutdown()
             statusMessage = "Disconnected"
         }
     }
 
-    func shutdown() async {
+    public func shutdown() async {
         await disconnectIfNeeded()
         connectionState = .disconnected
         connectedServerTitle = nil
@@ -143,14 +291,19 @@ final class MCPAppModel {
         prompts = []
     }
 
-    func refreshCatalog() async throws {
+    public func stopMCPJSONWatching() {
+        mcpJSONWatcher.stop()
+        mcpJSONWatchStatus = nil
+    }
+
+    public func refreshCatalog() async throws {
         guard let session else { return }
         tools = try await session.listTools()
         resources = try await session.listResources()
         prompts = try await session.listPrompts()
     }
 
-    func ping() {
+    public func ping() {
         runOperation("Ping") {
             guard let session = self.session else { throw MCPGUIError.notConnected }
             let ok = try await session.ping()
@@ -158,7 +311,7 @@ final class MCPAppModel {
         }
     }
 
-    func callSelectedTool() {
+    public func callSelectedTool() {
         guard let name = selectedToolName else {
             errorMessage = "Select a tool first."
             return
@@ -175,7 +328,7 @@ final class MCPAppModel {
         }
     }
 
-    func readSelectedResource() {
+    public func readSelectedResource() {
         guard let uri = selectedResourceURI else {
             errorMessage = "Select a resource first."
             return
@@ -188,7 +341,7 @@ final class MCPAppModel {
         }
     }
 
-    func runSelectedPrompt() {
+    public func runSelectedPrompt() {
         guard let name = selectedPromptName else {
             errorMessage = "Select a prompt first."
             return
@@ -206,12 +359,12 @@ final class MCPAppModel {
         }
     }
 
-    func selectTool(_ tool: MCPTool) {
+    public func selectTool(_ tool: MCPTool) {
         selectedToolName = tool.name
         toolArgumentsJSON = JSONArgumentsParser.template(for: tool.inputSchema)
     }
 
-    func selectPrompt(_ prompt: MCPPrompt) {
+    public func selectPrompt(_ prompt: MCPPrompt) {
         selectedPromptName = prompt.name
         promptArgumentsJSON = JSONArgumentsParser.template(for: prompt.arguments)
     }
@@ -243,12 +396,12 @@ final class MCPAppModel {
     }
 }
 
-enum MCPGUIError: LocalizedError {
+public enum MCPGUIError: LocalizedError {
     case notConnected
     case toolError(String)
     case invalidJSON(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .notConnected:
             return "Not connected to a server."
@@ -260,8 +413,8 @@ enum MCPGUIError: LocalizedError {
     }
 }
 
-enum JSONArgumentsParser {
-    static func decodeObject(_ json: String) throws -> [String: AnyCodableValue] {
+public enum JSONArgumentsParser {
+    public static func decodeObject(_ json: String) throws -> [String: AnyCodableValue] {
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
         let payload = trimmed.isEmpty ? "{}" : trimmed
         guard let data = payload.data(using: .utf8) else {
@@ -274,7 +427,7 @@ enum JSONArgumentsParser {
         }
     }
 
-    static func decodeStringMap(_ json: String) throws -> [String: String] {
+    public static func decodeStringMap(_ json: String) throws -> [String: String] {
         let object = try decodeObject(json)
         var result: [String: String] = [:]
         for (key, value) in object {
@@ -295,7 +448,7 @@ enum JSONArgumentsParser {
         return result
     }
 
-    static func template(for schema: AnyCodableValue?) -> String {
+    public static func template(for schema: AnyCodableValue?) -> String {
         guard let schema, case .object(let root) = schema,
               case .object(let props) = root["properties"] else {
             return "{}"
@@ -308,7 +461,7 @@ enum JSONArgumentsParser {
         return prettyJSON(template) ?? "{}"
     }
 
-    static func template(for arguments: [MCPPromptArgument]?) -> String {
+    public static func template(for arguments: [MCPPromptArgument]?) -> String {
         guard let arguments, !arguments.isEmpty else { return "{}" }
         var template: [String: String] = [:]
         for argument in arguments {
@@ -358,8 +511,8 @@ enum JSONArgumentsParser {
     }
 }
 
-enum MCPContentFormatter {
-    static func text(_ content: MCPContent) -> String {
+public enum MCPContentFormatter {
+    public static func text(_ content: MCPContent) -> String {
         switch content {
         case .text(let text, _):
             return text

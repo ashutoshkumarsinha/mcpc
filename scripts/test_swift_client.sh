@@ -41,8 +41,20 @@ echo "== read-resource =="
 "$MCPC" -s test-server read-resource "test://info"
 
 echo ""
+echo "== list-resources =="
+"$MCPC" -s test-server list-resources
+
+echo ""
+echo "== list-prompts =="
+"$MCPC" -s test-server list-prompts
+
+echo ""
 echo "== get-prompt =="
 "$MCPC" -s test-server get-prompt greet --name "Swift"
+
+echo ""
+echo "== call-tool server_info =="
+"$MCPC" -s test-server call-tool server_info
 
 echo ""
 echo "All mcpc integration checks passed."

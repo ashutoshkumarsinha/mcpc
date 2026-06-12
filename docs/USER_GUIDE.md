@@ -38,6 +38,29 @@ Optional: add to your PATH:
 export PATH="/path/to/mcpc/.build/debug:$PATH"
 ```
 
+### DMG distribution (GUI app)
+
+Build a release `.app` bundle and compressed DMG installer:
+
+```bash
+make dmg
+```
+
+Output:
+
+- `dist/MCPC.app` — drag to Applications
+- `dist/MCPC-<version>.dmg` — shareable installer image
+
+The DMG includes `config.toml.example` and a short README. Copy the example to a working directory, edit your MCP servers, then launch MCPC. The app reads `config.toml` from the current working directory unless `MCPC_CONFIG` is set.
+
+Customize packaging:
+
+```bash
+APP_NAME=MCPC BUNDLE_ID=com.example.mcpc CODE_SIGN_IDENTITY="-" make dmg
+```
+
+Use `make app` to build only the `.app` bundle without creating a DMG.
+
 ## Configuration
 
 ### Config file location
@@ -98,18 +121,24 @@ Tips:
 - Set `log_server_stderr = true` to forward subprocess stderr (useful when debugging stdio servers).
 - Per-server `env` merges into a minimal subprocess environment (`HOME`, `PATH`, etc.).
 
-### Adding a remote HTTP/SSE server
+### Adding a remote SSE server
+
+SSE (MCP 2024-11-05): open a GET stream at `url`, POST JSON-RPC to the session endpoint announced in the first `endpoint` event.
 
 ```toml
 [[servers]]
 name = "remote-api"
-transport = "http_sse"
+transport = "sse"
 url = "https://example.com/mcp/sse"
 trust_self_signed_certificates = false
+max_reconnect_attempts = 3
+reconnect_base_delay_seconds = 1.0
 
 [servers.remote-api.headers]
 Authorization = "Bearer YOUR_TOKEN_HERE"
 ```
+
+`http_sse` is accepted as an alias for `sse`. FastMCP and similar servers that return `202 Accepted` with a plain-text body are supported.
 
 ### Adding a WebSocket server
 

@@ -16,6 +16,7 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
     private let command: String
     private let arguments: [String]
     private let environment: [String: String]
+    private let workingDirectory: String?
     private let logStderr: Bool
 
     private var process: Process?
@@ -31,11 +32,13 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
         command: String,
         arguments: [String] = [],
         environment: [String: String] = [:],
+        workingDirectory: String? = nil,
         logStderr: Bool = false
     ) {
         self.command = command
         self.arguments = arguments
         self.environment = environment
+        self.workingDirectory = workingDirectory
         self.logStderr = logStderr
     }
 
@@ -44,6 +47,9 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
         proc.executableURL = URL(fileURLWithPath: command)
         proc.arguments = arguments
         proc.environment = environment
+        if let workingDirectory, !workingDirectory.isEmpty {
+            proc.currentDirectoryURL = URL(fileURLWithPath: workingDirectory, isDirectory: true)
+        }
 
         let stdin = Pipe()
         let stdout = Pipe()

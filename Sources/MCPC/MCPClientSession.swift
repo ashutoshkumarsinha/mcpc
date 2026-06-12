@@ -22,17 +22,24 @@ public actor MCPClientSession {
         let timeout = Duration.seconds(config.client.requestTimeoutSeconds)
         let connection = MCPClientConnection(transport: transport, requestTimeout: timeout)
         self.connection = connection
-        self.serverInfo = try await connection.initialize(
-            clientName: config.app.name,
-            clientVersion: config.app.version,
-            protocolVersion: config.client.protocolVersion
-        )
+
+        do {
+            self.serverInfo = try await connection.initialize(
+                clientName: config.app.name,
+                clientVersion: config.app.version,
+                protocolVersion: config.client.protocolVersion
+            )
+        } catch {
+            try? await connection.disconnect()
+            throw error
+        }
+
         if let info = self.serverInfo {
             log.info(
                 "Connected",
                 metadata: [
                     "server": .string(server.name),
-                    "transport": .string(server.transport.rawValue),
+                    "transport": .string(server.transport.configKey),
                     "remote_name": .string(info.serverInfo.name),
                     "remote_version": .string(info.serverInfo.version),
                 ]

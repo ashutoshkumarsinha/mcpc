@@ -13,7 +13,7 @@ BUILD_DIR := $(ROOT)/.build/$(BUILD_CONFIG)
 MCPC_BIN := $(BUILD_DIR)/mcpc
 MCPC_GUI_BIN := $(BUILD_DIR)/mcpc-gui
 
-.PHONY: help build release clean test gui mcpc mcpc-gui \
+.PHONY: help build release clean test test-unit test-cli test-sse test-all gui mcpc mcpc-gui app dmg \
 	list-servers ping list-tools install
 
 .DEFAULT_GOAL := help
@@ -41,11 +41,29 @@ clean: ## Remove build artifacts
 	swift package clean
 	rm -rf $(ROOT)/.build
 
-test: mcpc ## Run integration tests against test-server
+test: test-all ## Run all unit and integration tests
+
+test-unit: ## Run Swift unit tests (MCPC + GUI core)
+	swift test
+
+test-cli: mcpc ## Run extended CLI integration tests
 	MCPC_BIN=$(MCPC_BIN) $(ROOT)/scripts/test_swift_client.sh
+	MCPC_BIN=$(MCPC_BIN) $(ROOT)/scripts/test_cli.sh
+
+test-sse: mcpc ## Run integration tests against test-server (SSE)
+	MCPC_BIN=$(MCPC_BIN) $(ROOT)/scripts/test_sse_client.sh
+
+test-all: mcpc ## Run unit tests + CLI + SSE integration
+	$(ROOT)/scripts/test_all.sh
 
 gui: mcpc-gui ## Launch mcpc-gui
 	exec $(MCPC_GUI_BIN)
+
+app: release ## Package mcpc-gui as dist/MCPC.app (release)
+	BUILD_CONFIG=release $(ROOT)/scripts/package_app.sh
+
+dmg: release ## Build dist/MCPC-<version>.dmg installer image
+	BUILD_CONFIG=release $(ROOT)/scripts/create_dmg.sh
 
 list-servers: mcpc ## List servers from config.toml
 	$(MCPC_BIN) list-servers

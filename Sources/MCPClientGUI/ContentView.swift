@@ -1,5 +1,6 @@
 import AppKit
 import MCPC
+import MCPClientGUICore
 import SwiftUI
 
 struct ContentView: View {
@@ -30,6 +31,9 @@ struct ContentView: View {
             }
         }
         .navigationTitle("MCPC")
+        .sheet(isPresented: $model.isImportCursorSheetPresented) {
+            ImportCursorServersSheet(model: model)
+        }
     }
 }
 
@@ -119,6 +123,27 @@ struct SidebarView: View {
                     pickConfigFile()
                 }
                 .buttonStyle(.link)
+
+                Button("Import Cursor MCP JSON…") {
+                    model.isImportCursorSheetPresented = true
+                }
+                .buttonStyle(.link)
+
+                Toggle(
+                    "Hot reload mcp.json",
+                    isOn: Binding(
+                        get: { model.config?.client.mcpJSONHotReload ?? false },
+                        set: { model.setMCPJSONHotReload($0) }
+                    )
+                )
+                .font(.caption)
+
+                if let watchStatus = model.mcpJSONWatchStatus {
+                    Text("Watching \(watchStatus)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
 
             Section("Servers") {
@@ -162,7 +187,7 @@ struct SidebarView: View {
             }
             parts.append(contentsOf: server.args)
             return parts.joined(separator: " ")
-        case .httpSSE, .websocket:
+        case .sse, .streamableHTTP, .websocket:
             return server.url ?? ""
         }
     }

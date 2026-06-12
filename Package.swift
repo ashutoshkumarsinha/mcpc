@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .library(name: "MCPC", targets: ["MCPC"]),
+        .library(name: "MCPClientGUICore", targets: ["MCPClientGUICore"]),
         .executable(name: "mcpc", targets: ["MCPClientCLI"]),
         .executable(name: "mcpc-gui", targets: ["MCPClientGUI"]),
     ],
@@ -29,12 +30,28 @@ let package = Package(
             name: "MCPClientCLI",
             dependencies: ["MCPC"]
         ),
-        .executableTarget(
-            name: "MCPClientGUI",
+        .target(
+            name: "MCPClientGUICore",
             dependencies: [
                 "MCPC",
                 .product(name: "MCPClient", package: "SwiftMCPClient"),
             ]
+        ),
+        .executableTarget(
+            name: "MCPClientGUI",
+            dependencies: [
+                "MCPC",
+                "MCPClientGUICore",
+                .product(name: "MCPClient", package: "SwiftMCPClient"),
+            ]
+        ),
+        .testTarget(
+            name: "MCPCTests",
+            dependencies: ["MCPC"]
+        ),
+        .testTarget(
+            name: "MCPClientGUITests",
+            dependencies: ["MCPClientGUICore", "MCPC"]
         ),
     ]
 )
