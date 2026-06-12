@@ -10,8 +10,10 @@ struct MCPClientGUIApp: App {
     @State private var isAboutPresented = false
 
     init() {
+        _ = try? MCPCUserDirectory.prepareForFirstLaunch()
+        let configURL = MCPCUserDirectory.configURL()
         MCPCLogging.bootstrap(with: .default)
-        if let config = try? AppConfigLoader.load(from: AppConfigLoader.defaultConfigURL()) {
+        if let config = try? AppConfigLoader.load(from: configURL) {
             MCPCLogging.update(with: config.logging)
         }
     }

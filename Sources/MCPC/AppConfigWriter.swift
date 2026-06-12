@@ -25,6 +25,9 @@ public enum AppConfigWriter {
         lines.append("[logging]")
         lines.append("level = \(tomlString(config.logging.level.rawValue))")
         lines.append("destination = \(tomlString(config.logging.destination.rawValue))")
+        if let logFile = config.logging.logFile, !logFile.isEmpty {
+            lines.append("log_file = \(tomlString(logFile))")
+        }
         if !config.logging.components.isEmpty {
             lines.append("")
             lines.append("[logging.components]")

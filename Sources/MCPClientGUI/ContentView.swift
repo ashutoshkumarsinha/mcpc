@@ -105,6 +105,14 @@ struct ConnectionBar: View {
     }
 }
 
+private func configPathLabel(_ url: URL) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    if url.path.hasPrefix(home) {
+        return "~" + url.path.dropFirst(home.count)
+    }
+    return url.path
+}
+
 struct SidebarView: View {
     @Bindable var model: MCPAppModel
 
@@ -112,7 +120,7 @@ struct SidebarView: View {
         List(selection: $model.selectedServerName) {
             Section("Config") {
                 LabeledContent("File") {
-                    Text(model.configURL.lastPathComponent)
+                    Text(configPathLabel(model.configURL))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

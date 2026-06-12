@@ -21,9 +21,13 @@ flowchart LR
     CLI --> Lib
     GUI --> Lib
     Lib --> Config
+    Lib --> UserDir["~/.mcpc/"]
     Lib --> S1
     Lib --> S2
+    Config -.->|"GUI default"| UserDir
 ```
+
+**MCP Client** (packaged GUI) stores config and logs in `~/.mcpc/`, created on first launch via `MCPCUserDirectory`. Development and CLI workflows may use `./config.toml` or `MCPC_CONFIG` instead.
 
 ## 2. Layered architecture
 
@@ -37,8 +41,8 @@ flowchart LR
 │  MCPClientSession (actor)                               │
 ├─────────────────────────────────────────────────────────┤
 │  Configuration & Transport                              │
-│  AppConfigLoader │ MCPCLI │ TransportFactory │ Cursor*  │
-│  SubprocessStdio │ SSETransportAdapter                   │
+│  AppConfigLoader │ MCPCUserDirectory │ MCPCLI │ Cursor* │
+│  TransportFactory │ SubprocessStdio │ SSETransportAdapter│
 ├─────────────────────────────────────────────────────────┤
 │  Protocol (external)                                    │
 │  SwiftMCPClient — MCPClientConnection, MCPTransport     │
@@ -280,7 +284,24 @@ Manual import uses the same `CursorMCPSync` path via `ImportCursorServersSheet`.
 
 ### 9.4 App lifecycle
 
-`MCPClientGUIApp` configures swift-log (suppress `MCPClient` warnings) and calls `model.shutdown()` on:
+**Startup** (`MCPClientGUIApp.init`):
+
+```mermaid
+sequenceDiagram
+    participant App as MCPClientGUIApp
+    participant Dir as MCPCUserDirectory
+    participant Log as MCPCLogging
+    participant Model as MCPAppModel
+
+    App->>Dir: prepareForFirstLaunch()
+    Note over Dir: create ~/.mcpc/, seed config.toml, touch mcpc.log
+    App->>Log: bootstrap + update from ~/.mcpc/config.toml
+    App->>Model: load ~/.mcpc/config.toml (default)
+```
+
+`prepareForFirstLaunch()` is idempotent: existing `config.toml` is never overwritten.
+
+**Shutdown** — `MCPClientGUIApp` calls `model.shutdown()` on:
 
 - `scenePhase == .background`
 - `NSApplication.willTerminateNotification`
@@ -304,7 +325,10 @@ flowchart LR
     CLI --> MCPCLog
     MCPCLog --> Handler
     Handler --> Stderr["stderr / stdout"]
+    Handler --> File["~/.mcpc/mcpc.log"]
 ```
+
+When `destination = "file"`, `ConfigurableLogHandler` appends to the path from `LoggingSettings.resolvedLogFileURL()` (relative names resolve under `~/.mcpc`). The production GUI template enables file logging by default.
 
 | Logger label | Component |
 |--------------|-----------|
@@ -370,11 +394,11 @@ make dmg
     └── scripts/create_dmg.sh
             └── scripts/package_app.sh
                     └── swift build -c release --product mcpc-gui
-                    └── dist/MCPC.app (Info.plist + codesign)
-                    └── dist/MCPC-<version>.dmg (hdiutil)
+                    └── dist/MCP Client.app (Info.plist + codesign)
+                    └── dist/MCP Client-<version>.dmg (hdiutil)
 ```
 
-DMG staging includes `Applications` symlink, `config.toml.example`, and install README. Version comes from `[app].version` in `config.toml`.
+DMG staging includes `Applications` symlink, `config.toml.example`, and `DMG_README.txt`. The app bundle does not ship a live user config; first launch runs `MCPCUserDirectory.prepareForFirstLaunch()` to create `~/.mcpc/`. DMG build version comes from `[app].version` in the repository `config.toml`.
 
 ## 14. Security considerations
 
@@ -400,6 +424,7 @@ DMG staging includes `Applications` symlink, `config.toml.example`, and install 
 | `SSETransportAdapter` | Filter non-JSON POST ack bodies (FastMCP `202 Accepted`) |
 | Minimal subprocess env | Predictable stdio subprocess behavior; per-server `env` in config |
 | `MCPJSONFileWatcher` sync deinit | Avoid async `stop()` race on deallocation |
+| `~/.mcpc` user directory | Standard macOS per-user config/log location; idempotent first-launch seeding |
 
 ## 16. Extension points
 

@@ -77,8 +77,34 @@ struct ConfigurableLogHandler: LogHandler {
             FileHandle.standardError.write(data)
         case .stdout:
             FileHandle.standardOutput.write(data)
+        case .file:
+            writeToLogFile(data, url: settings.resolvedLogFileURL())
         case .none:
             break
+        }
+    }
+
+    private static let fileLogLock = OSAllocatedUnfairLock()
+
+    private func writeToLogFile(_ data: Data, url: URL?) {
+        guard let url else { return }
+        Self.fileLogLock.withLock {
+            let fileManager = FileManager.default
+            let directory = url.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: directory.path) {
+                try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            if !fileManager.fileExists(atPath: url.path) {
+                fileManager.createFile(atPath: url.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                // silent: best-effort file logging
+            }
         }
     }
 }

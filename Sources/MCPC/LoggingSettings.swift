@@ -29,21 +29,44 @@ public enum LogDestination: String, Sendable, Codable, CaseIterable {
     case stderr
     case stdout
     case none
+    case file
 }
 
 public struct LoggingSettings: Sendable {
     public var level: LogLevelName
     public var destination: LogDestination
+    /// Log file name or path when `destination` is `file`. Relative paths resolve under `~/.mcpc`.
+    public var logFile: String?
     public var components: [String: LogLevelName]
 
     public init(
         level: LogLevelName = .info,
         destination: LogDestination = .stderr,
+        logFile: String? = nil,
         components: [String: LogLevelName] = [:]
     ) {
         self.level = level
         self.destination = destination
+        self.logFile = logFile
         self.components = components
+    }
+
+    public func resolvedLogFileURL(fileManager: FileManager = .default) -> URL? {
+        guard destination == .file else { return nil }
+        let path = logFile?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPath = (path?.isEmpty == false) ? path! : MCPCUserDirectory.defaultLogFileName
+        if resolvedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: resolvedPath).standardizedFileURL
+        }
+        if resolvedPath.hasPrefix("~/") {
+            let relative = String(resolvedPath.dropFirst(2))
+            return fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(relative)
+                .standardizedFileURL
+        }
+        return MCPCUserDirectory.url(fileManager: fileManager)
+            .appendingPathComponent(resolvedPath)
+            .standardizedFileURL
     }
 
     public static let `default` = LoggingSettings(
@@ -73,6 +96,7 @@ extension LoggingSettings: Decodable {
     enum CodingKeys: String, CodingKey {
         case level
         case destination
+        case logFile = "log_file"
         case components
     }
 
@@ -80,6 +104,7 @@ extension LoggingSettings: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         level = try container.decodeIfPresent(LogLevelName.self, forKey: .level) ?? .info
         destination = try container.decodeIfPresent(LogDestination.self, forKey: .destination) ?? .stderr
+        logFile = try container.decodeIfPresent(String.self, forKey: .logFile)
         components = try container.decodeIfPresent([String: LogLevelName].self, forKey: .components) ?? [:]
     }
 }

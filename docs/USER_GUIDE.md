@@ -6,7 +6,7 @@ This guide explains how to install MCPC, configure MCP servers, and use the comm
 
 MCPC is a **client** for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). MCP servers expose **tools** (callable functions), **resources** (readable data), and **prompts** (templated instructions). MCPC connects to those servers so you can list and invoke their capabilities from the terminal or a desktop app.
 
-MCPC is a **pure Swift** client. It is **server-agnostic**: you define MCP servers in `config.toml` (stdio subprocess, HTTP/SSE, or WebSocket). The only Python in this repo is the bundled `test-server/` used for integration tests.
+MCPC is a **pure Swift** client. It is **server-agnostic**: you define MCP servers in `config.toml` (stdio subprocess, HTTP/SSE, or WebSocket). The packaged macOS app is branded **MCP Client** and stores config in `~/.mcpc/`. The only Python in this repo is the bundled `test-server/` used for integration tests.
 
 ## Installation
 
@@ -48,10 +48,10 @@ make dmg
 
 Output:
 
-- `dist/MCPC.app` — drag to Applications
-- `dist/MCPC-<version>.dmg` — shareable installer image
+- `dist/MCP Client.app` — drag to Applications
+- `dist/MCP Client-<version>.dmg` — shareable installer image
 
-The DMG includes `config.toml.example` and a short README. Copy the example to a working directory, edit your MCP servers, then launch MCPC. The app reads `config.toml` from the current working directory unless `MCPC_CONFIG` is set.
+The DMG includes `config.toml.example` and `DMG_README.txt` as references. **You do not copy these into the app bundle.** On first launch, **MCP Client** creates `~/.mcpc/` automatically (see below).
 
 Customize packaging:
 
@@ -92,15 +92,52 @@ Unit tests cover config validation, CLI argument parsing, Cursor `mcp.json` impo
 
 ## Configuration
 
+### User data directory (`~/.mcpc`)
+
+**MCP Client** (the packaged GUI) stores per-user configuration and logs under your home directory:
+
+| Path | Purpose |
+|------|---------|
+| `~/.mcpc/` | Created on first app launch (or first CLI run when no other config exists) |
+| `~/.mcpc/config.toml` | MCP server definitions and client settings |
+| `~/.mcpc/mcpc.log` | Application diagnostic log (when file logging is enabled) |
+
+**First launch** — opening **MCP Client** from Applications:
+
+1. Creates `~/.mcpc/` if it does not exist
+2. Writes a starter `config.toml` (only if missing — your existing config is never overwritten)
+3. Creates an empty `mcpc.log` if missing
+
+The starter config enables Cursor hot reload, sets `destination = "file"`, and includes commented `[[servers]]` examples. Add servers by editing the file, using **Import Cursor MCP JSON…**, or enabling hot reload to sync from `~/.cursor/mcp.json`.
+
+Open the config quickly:
+
+```bash
+open -e ~/.mcpc/config.toml    # TextEdit
+# or
+$EDITOR ~/.mcpc/config.toml
+```
+
+View recent logs:
+
+```bash
+tail -f ~/.mcpc/mcpc.log
+```
+
 ### Config file location
 
-MCPC looks for configuration in this order:
+**GUI** — always defaults to `~/.mcpc/config.toml`. Use **Choose config.toml…** in the sidebar or set `MCPC_CONFIG` to override.
 
-1. `--config /path/to/config.toml` (CLI) or a file chosen in the GUI
+**CLI** — resolution order:
+
+1. `--config /path/to/config.toml` (`-c`)
 2. `MCPC_CONFIG` environment variable
-3. `./config.toml` in the **current working directory**
+3. `./config.toml` in the **current working directory** (if the file exists — typical for repo development)
+4. `~/.mcpc/config.toml` — created automatically when steps 1–3 do not find a config
 
-Always run MCPC from a directory where paths in the config resolve correctly, or use absolute paths in `args`.
+When developing in the repository, run CLI commands from the project root so paths like `test-server/` in the repo `config.toml` resolve. For production CLI use without a project config, rely on `~/.mcpc/config.toml`.
+
+Always use absolute paths in `args` when the config file and server working directory may differ.
 
 ### Minimal config
 
@@ -201,12 +238,13 @@ url = "wss://example.com/mcp/ws"
 
 ### Logging settings
 
-MCPC writes structured logs to stderr by default. Configure in `config.toml`:
+MCPC writes structured logs to stderr by default. The production GUI template uses file logging under `~/.mcpc`. Configure in `config.toml`:
 
 ```toml
 [logging]
 level = "info"
-destination = "stderr"
+destination = "file"
+log_file = "mcpc.log"
 
 [logging.components]
 mcpc = "debug"
@@ -216,14 +254,18 @@ MCPClient = "warning"
 | Setting | Values | Description |
 |---------|--------|-------------|
 | `level` | `trace` … `critical`, `none` | Default verbosity for all loggers |
-| `destination` | `stderr`, `stdout`, `none` | Where MCPC writes its own logs |
+| `destination` | `stderr`, `stdout`, `none`, `file` | Where MCPC writes its own logs |
+| `log_file` | file name or path | Log file when `destination = "file"` (relative paths resolve under `~/.mcpc`) |
 | `logging.components` | label → level | Per-component overrides (prefix match) |
 
 Examples:
 
+- **Production GUI (default):** `destination = "file"` and `log_file = "mcpc.log"` → logs append to `~/.mcpc/mcpc.log`.
+- **Development / CLI:** `destination = "stderr"` to see logs in the terminal.
 - **Debug transport issues:** set `mcpc = "debug"` or global `level = "debug"`.
 - **Silence everything:** `destination = "none"`.
 - **Quiet SwiftMCPClient shutdown warnings:** `MCPClient = "error"`.
+- **Custom log path:** `log_file = "/tmp/mcpc-debug.log"` or `log_file = "~/Desktop/mcpc.log"`.
 
 Note: `log_server_stderr` forwards the **MCP server's** stderr; `[logging]` controls **MCPC's** own diagnostic output.
 
@@ -316,7 +358,7 @@ swift run mcpc-gui
 
 ### Workflow
 
-1. **Choose config** — Click "Choose config.toml…" in the sidebar if your config is not the default `./config.toml`.
+1. **Choose config** — The sidebar shows `~/.mcpc/config.toml` by default. Click "Choose config.toml…" to use a different file.
 2. **Select a server** — Click a server name in the sidebar.
 3. **Connect** — Click **Connect** (⌘↩). The status indicator turns green when connected.
 4. **Explore tabs:**
@@ -391,6 +433,7 @@ Or individual integration scripts:
 
 MCPC cannot find `config.toml`. Either:
 
+- Launch MCP Client once to create `~/.mcpc/config.toml`, or
 - `cd` to the directory containing the config, or
 - Pass `-c /full/path/config.toml`, or
 - Set `MCPC_CONFIG`.
@@ -403,10 +446,25 @@ The `-s` name does not match any `[[servers]].name`. Run `mcpc list-servers` to 
 
 Only required for the bundled `test-server`. Install [uv](https://docs.astral.sh/uv/) or use a non-Python MCP server in `config.toml`.
 
+### Where are my logs?
+
+| Setup | Location |
+|-------|----------|
+| **MCP Client** (default template) | `~/.mcpc/mcpc.log` |
+| `destination = "stderr"` or `"stdout"` | Terminal / Console.app (when launched from CLI) |
+| Custom `log_file` | Path you set (relative paths are under `~/.mcpc`) |
+
+```bash
+tail -f ~/.mcpc/mcpc.log
+```
+
+If the log file is empty, raise verbosity: set `level = "debug"` or `mcpc = "debug"` in `[logging.components]`, then restart the app.
+
 ### CLI hangs or times out
 
 - Increase `request_timeout_seconds` in config.
 - Enable `log_server_stderr = true` to see server errors.
+- Check `~/.mcpc/mcpc.log` (GUI) or stderr (CLI) for transport errors.
 - Confirm the server command works standalone:
   ```bash
   uv run --directory test-server python server.py
@@ -437,11 +495,12 @@ Use with caution in production.
 
 ## Tips for daily use
 
-- Keep one `config.toml` per project, or use `MCPC_CONFIG` in shell profiles.
-- Use `config.local.toml` (gitignored) for machine-specific paths and secrets.
-- Prefer `mcpc` in scripts and CI; use `mcpc-gui` for exploratory debugging.
+- **GUI / DMG installs:** edit `~/.mcpc/config.toml`; logs are in `~/.mcpc/mcpc.log` by default.
+- **Per-project CLI:** keep `config.toml` in the repo and run `mcpc` from that directory, or set `MCPC_CONFIG` in shell profiles.
+- Use `config.local.toml` (gitignored) for machine-specific paths and secrets in development trees.
+- Prefer `mcpc` in scripts and CI; use **MCP Client** for exploratory debugging.
 - Run `make test` before committing changes that touch config, transports, or the GUI model.
-- Distribute the GUI with `make dmg`; share `dist/MCPC-<version>.dmg`.
+- Distribute the GUI with `make dmg`; share `dist/MCP Client-<version>.dmg`.
 - After changing server code, disconnect and reconnect (or restart the CLI) to pick up changes.
 
 ## Further reading

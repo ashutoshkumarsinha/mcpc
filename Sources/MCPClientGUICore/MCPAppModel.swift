@@ -64,7 +64,7 @@ public final class MCPAppModel {
     }
 
     public static func defaultConfigURL() -> URL {
-        AppConfigLoader.defaultConfigURL()
+        MCPCUserDirectory.configURL()
     }
 
     public func importCursorServers(

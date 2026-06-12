@@ -23,6 +23,7 @@ This document defines functional requirements, configuration schema, supported M
 - macOS GUI for interactive server exploration
 - Custom stdio subprocess transport with deadlock-safe I/O
 - DMG packaging for the GUI app (`make dmg`)
+- Per-user data directory `~/.mcpc/` for production config and logs (`MCPCUserDirectory`)
 - Automated test suite: Swift unit tests + CLI/SSE integration scripts
 
 ### Out of scope
@@ -46,11 +47,36 @@ This document defines functional requirements, configuration schema, supported M
 
 ### 4.1 File location
 
-Resolution order:
+#### CLI (`mcpc`)
+
+Resolution order (`AppConfigLoader.defaultConfigURL`):
 
 1. Path given by `--config` / `-c`
 2. `MCPC_CONFIG` environment variable
-3. `./config.toml` relative to the process current working directory
+3. `./config.toml` relative to the process current working directory (if the file exists)
+4. `~/.mcpc/config.toml` — if steps 1–3 do not yield an existing file, `MCPCUserDirectory.prepareForFirstLaunch()` creates `~/.mcpc/` and seeds a starter config before returning this path
+
+#### GUI (`mcpc-gui` / **MCP Client**)
+
+The GUI always uses `~/.mcpc/config.toml` as its default config (`MCPAppModel.defaultConfigURL` → `MCPCUserDirectory.configURL`). The user may override via **Choose config.toml…** in the sidebar.
+
+#### User data directory (`MCPCUserDirectory`)
+
+Production installs store per-user state under `~/.mcpc/`:
+
+| Path | Purpose |
+|------|---------|
+| `~/.mcpc/` | User data root (created on first GUI launch, or first CLI use when no other config exists) |
+| `~/.mcpc/config.toml` | Server definitions and client settings |
+| `~/.mcpc/mcpc.log` | Application log file when `[logging].destination = "file"` |
+
+`MCPCUserDirectory.prepareForFirstLaunch()`:
+
+1. Creates `~/.mcpc/` with intermediate directories if needed
+2. Writes `defaultConfigTemplate()` to `config.toml` only when the file does not already exist (existing configs are never overwritten)
+3. Creates an empty `mcpc.log` if missing
+
+The seeded template sets `app.name = "MCP Client"`, enables `mcp_json_hot_reload`, uses `destination = "file"` and `log_file = "mcpc.log"`, and includes commented `[[servers]]` examples. An empty `servers` list is valid at load time.
 
 ### 4.2 Schema
 
@@ -78,7 +104,10 @@ Resolution order:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `level` | enum | `info` | Global log level: `trace`, `debug`, `info`, `notice`, `warning`, `error`, `critical`, `none` |
-| `destination` | enum | `stderr` | Log output: `stderr`, `stdout`, or `none` (disable MCPC logs) |
+| `destination` | enum | `stderr` | Log output: `stderr`, `stdout`, `none`, or `file` |
+| `log_file` | string | — | Log file name or path when `destination = "file"`. Relative paths resolve under `~/.mcpc`. Defaults to `mcpc.log` when omitted. Absolute paths and `~/…` are supported. |
+
+The production GUI template uses `destination = "file"` and `log_file = "mcpc.log"`. `MCPCLogging` appends structured log lines to the resolved file URL (`LoggingSettings.resolvedLogFileURL()`).
 
 #### `[logging.components]`
 
@@ -281,6 +310,15 @@ Import supports stdio (`command`/`args`/`cwd`/`env`), SSE (`url` with `/sse`), s
 
 ### 7.4 Lifecycle
 
+**First launch** (`MCPClientGUIApp.init`):
+
+1. `MCPCUserDirectory.prepareForFirstLaunch()` ensures `~/.mcpc/` exists with starter `config.toml` and `mcpc.log`
+2. `MCPCLogging.bootstrap(with:)` then `MCPCLogging.update(with:)` from the loaded config (if parseable)
+3. `MCPAppModel` loads `~/.mcpc/config.toml` on startup
+
+**Runtime:**
+
+- Sidebar displays the active config path (tilde-shortened, e.g. `~/.mcpc/config.toml`)
 - On scene background or app termination: `shutdown()` disconnects cleanly
 - MCP client library warnings during shutdown are suppressed (log level `.error` for `MCPClient` labels)
 
@@ -392,15 +430,19 @@ Requires [uv](https://docs.astral.sh/uv/) for GUI integration tests that spawn t
 
 ### 12.1 App bundle (`make app`)
 
-`scripts/package_app.sh` builds release `mcpc-gui`, assembles `dist/MCPC.app` with `Info.plist`, and ad-hoc codesigns by default.
+`scripts/package_app.sh` builds release `mcpc-gui`, assembles `dist/MCP Client.app` (default `APP_NAME`) with `Info.plist`, and ad-hoc codesigns by default.
 
 Environment overrides: `APP_NAME`, `BUNDLE_ID`, `APP_VERSION`, `CODE_SIGN_IDENTITY`, `BUILD_CONFIG`.
 
+The packaged app does **not** bundle a user `config.toml`. First launch creates `~/.mcpc/` as described in §4.1.
+
 ### 12.2 DMG (`make dmg`)
 
-`scripts/create_dmg.sh` packages `MCPC.app` into `dist/MCPC-<version>.dmg` with an Applications symlink, `config.toml.example`, and `README.txt`.
+`scripts/create_dmg.sh` packages `MCP Client.app` into `dist/MCP Client-<version>.dmg` with an Applications symlink, `config.toml.example`, and `DMG_README.txt`.
 
-Version is read from `[app].version` in `config.toml`.
+`DMG_README.txt` documents the `~/.mcpc/` layout. `config.toml.example` is a reference copy for manual editing; the live config is created in the user's home directory on first launch.
+
+Build version for the DMG filename comes from `[app].version` in the repository `config.toml` (build-time). Runtime app version in **About MCP Client** reads `[app].version` from `~/.mcpc/config.toml` when present.
 
 ## 13. Non-functional requirements
 

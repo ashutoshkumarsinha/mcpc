@@ -292,6 +292,21 @@ private struct AppConfigDTO: Decodable {
     var client: ClientSettings
     var logging: LoggingSettings?
     var servers: [ServerConfig]
+
+    enum CodingKeys: String, CodingKey {
+        case app
+        case client
+        case logging
+        case servers
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        app = try container.decode(AppSettings.self, forKey: .app)
+        client = try container.decode(ClientSettings.self, forKey: .client)
+        logging = try container.decodeIfPresent(LoggingSettings.self, forKey: .logging)
+        servers = try container.decodeIfPresent([ServerConfig].self, forKey: .servers) ?? []
+    }
 }
 
 public enum AppConfigError: Error, CustomStringConvertible {
@@ -385,6 +400,7 @@ public enum AppConfigLoader {
         guard let settings else { return merged }
         merged.level = settings.level
         merged.destination = settings.destination
+        merged.logFile = settings.logFile
         for (key, value) in settings.components {
             merged.components[key] = value
         }
@@ -401,8 +417,16 @@ public enum AppConfigLoader {
         if let envPath = ProcessInfo.processInfo.environment["MCPC_CONFIG"], !envPath.isEmpty {
             return URL(fileURLWithPath: envPath).standardizedFileURL
         }
-        return URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        let cwdConfig = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
             .appendingPathComponent(defaultFileName)
-            .standardizedFileURL
+        if fileManager.fileExists(atPath: cwdConfig.path) {
+            return cwdConfig.standardizedFileURL
+        }
+        let userConfig = MCPCUserDirectory.configURL(fileManager: fileManager)
+        if fileManager.fileExists(atPath: userConfig.path) {
+            return userConfig
+        }
+        _ = try? MCPCUserDirectory.prepareForFirstLaunch(fileManager: fileManager)
+        return userConfig
     }
 }

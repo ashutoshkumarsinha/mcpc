@@ -1,5 +1,6 @@
-# Example MCPC configuration — copy to the directory where you launch MCPC
-# (or set MCPC_CONFIG to an absolute path).
+# Example MCP Client configuration.
+# Production GUI: edit ~/.mcpc/config.toml (created on first launch).
+# Development: copy to your project as config.toml or set MCPC_CONFIG.
 
 [app]
 name = "mcpc"
