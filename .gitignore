@@ -11,6 +11,10 @@ DerivedData/
 # Devbox
 .devbox/
 
+# Python test server
+test-server/.venv/
+test-server/uv.lock
+
 # Xcode / IDE
 .idea/
 *.xcworkspace
@@ -19,3 +23,4 @@ DerivedData/
 .env
 .env.*
 *.local.json
+config.local.toml

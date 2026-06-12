@@ -1,0 +1,43 @@
+# MCPC — generic macOS MCP client configuration
+
+[app]
+name = "mcpc"
+version = "1.0.0"
+
+[client]
+# Server used when --server is omitted (must match a [[servers]].name)
+default_server = "test-server"
+protocol_version = "2024-11-05"
+request_timeout_seconds = 120
+log_server_stderr = false
+
+# --- MCP servers -----------------------------------------------------------
+# transport: "stdio" | "http_sse" | "websocket"
+
+[[servers]]
+name = "test-server"
+transport = "stdio"
+command = "uv"
+args = ["run", "--directory", "test-server", "python", "server.py"]
+
+[[servers]]
+name = "3gpp-researcher-suite"
+transport = "stdio"
+command = "uv"
+args = [
+  "run",
+  "--directory",
+  "/Users/deeproot/PycharmProjects/3gpp-research-rag",
+  "python",
+  "mcp_server.py",
+]
+
+# Example remote server (uncomment and set URL to use):
+# [[servers]]
+# name = "remote-example"
+# transport = "http_sse"
+# url = "http://127.0.0.1:8080/sse"
+# trust_self_signed_certificates = false
+#
+# [servers.remote-example.headers]
+# Authorization = "Bearer your-token"

@@ -1,10 +1,18 @@
 import Foundation
 import MCPClient
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 #if os(macOS) || os(Linux)
 
 /// Stdio transport that spawns a subprocess and drains stderr so logging cannot deadlock pipes.
-actor SubprocessStdioTransport: MCPTransport {
+///
+/// Reads run on a dedicated background task so `send` and `receive` never block each other.
+final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
     private let command: String
     private let arguments: [String]
     private let environment: [String: String]
@@ -12,12 +20,11 @@ actor SubprocessStdioTransport: MCPTransport {
 
     private var process: Process?
     private var stdinPipe: Pipe?
-    private var stdoutPipe: Pipe?
-    private var stderrPipe: Pipe?
+    private var stdoutReaderTask: Task<Void, Never>?
     private var stderrDrainTask: Task<Void, Never>?
-    private var bufferedLines: [String] = []
-    private var readBuffer = ""
     private var isConnected = false
+
+    private let lineBuffer = LineBuffer()
 
     init(
         command: String,
@@ -32,8 +39,6 @@ actor SubprocessStdioTransport: MCPTransport {
     }
 
     func connect() async throws {
-        guard !isConnected else { return }
-
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: command)
         proc.arguments = arguments
@@ -55,17 +60,28 @@ actor SubprocessStdioTransport: MCPTransport {
 
         process = proc
         stdinPipe = stdin
-        stdoutPipe = stdout
-        stderrPipe = stderr
         isConnected = true
+
+        let stdoutHandle = stdout.fileHandleForReading
+        let buffer = lineBuffer
+        stdoutReaderTask = Task.detached { [weak self] in
+            await self?.readStdoutLoop(handle: stdoutHandle, process: proc, buffer: buffer)
+        }
 
         let stderrHandle = stderr.fileHandleForReading
         let shouldLogStderr = logStderr
+        let processID = proc.processIdentifier
         stderrDrainTask = Task.detached {
             while !Task.isCancelled {
                 let chunk = stderrHandle.availableData
                 if chunk.isEmpty {
-                    break
+                    var status: Int32 = 0
+                    let exited = waitpid(processID, &status, WNOHANG) > 0
+                    if exited {
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(10))
+                    continue
                 }
                 if shouldLogStderr, let text = String(data: chunk, encoding: .utf8), !text.isEmpty {
                     FileHandle.standardError.write(Data(text.utf8))
@@ -75,35 +91,36 @@ actor SubprocessStdioTransport: MCPTransport {
     }
 
     func disconnect() async throws {
-        guard let proc = process else { return }
-
         isConnected = false
+        stdoutReaderTask?.cancel()
+        stdoutReaderTask = nil
         stderrDrainTask?.cancel()
         stderrDrainTask = nil
 
         stdinPipe?.fileHandleForWriting.closeFile()
 
-        if proc.isRunning {
+        if let proc = process, proc.isRunning {
             try await Task.sleep(for: .milliseconds(100))
         }
 
-        if proc.isRunning {
+        if let proc = process, proc.isRunning {
             proc.terminate()
             try await Task.sleep(for: .milliseconds(100))
         }
 
         #if os(macOS)
-        if proc.isRunning {
+        if let proc = process, proc.isRunning {
             kill(proc.processIdentifier, SIGKILL)
         }
         #endif
 
         process = nil
         stdinPipe = nil
-        stdoutPipe = nil
-        stderrPipe = nil
-        bufferedLines = []
-        readBuffer = ""
+
+        let receivers = await lineBuffer.failAll()
+        for receiver in receivers {
+            receiver.resume(throwing: MCPError.transportClosed)
+        }
     }
 
     func send(_ data: Data) async throws {
@@ -118,29 +135,26 @@ actor SubprocessStdioTransport: MCPTransport {
 
         var messageData = data
         messageData.append(0x0A)
-        pipe.fileHandleForWriting.write(messageData)
+        try pipe.fileHandleForWriting.write(contentsOf: messageData)
     }
 
     func receive() async throws -> Data {
-        guard isConnected, let pipe = stdoutPipe else {
-            throw MCPError.connectionFailed(reason: "SubprocessStdioTransport is not connected")
-        }
+        try await lineBuffer.dequeueOrWait(isConnected: isConnected)
+    }
 
-        if !bufferedLines.isEmpty {
-            let line = bufferedLines.removeFirst()
-            guard let data = line.data(using: .utf8) else {
-                throw MCPError.invalidResponse
-            }
-            return data
-        }
+    private func readStdoutLoop(handle: FileHandle, process: Process, buffer: LineBuffer) async {
+        var readBuffer = ""
 
-        let handle = pipe.fileHandleForReading
-        while !Task.isCancelled {
+        while !Task.isCancelled, isConnected {
             let chunk = handle.availableData
 
             if chunk.isEmpty {
-                isConnected = false
-                throw MCPError.transportClosed
+                if !process.isRunning {
+                    await failPendingReceivers()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+                continue
             }
 
             guard let text = String(data: chunk, encoding: .utf8) else {
@@ -148,28 +162,30 @@ actor SubprocessStdioTransport: MCPTransport {
             }
 
             readBuffer.append(text)
-
             let lines = readBuffer.split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.count > 1 {
-                for index in 0..<(lines.count - 1) {
-                    let line = String(lines[index])
-                    if !line.isEmpty {
-                        bufferedLines.append(line)
-                    }
-                }
-                readBuffer = String(lines[lines.count - 1])
+            if lines.count <= 1 {
+                continue
+            }
 
-                if !bufferedLines.isEmpty {
-                    let firstLine = bufferedLines.removeFirst()
-                    guard let data = firstLine.data(using: .utf8) else {
-                        throw MCPError.invalidResponse
-                    }
-                    return data
+            readBuffer = String(lines[lines.count - 1])
+            for index in 0..<(lines.count - 1) {
+                let line = String(lines[index])
+                guard !line.isEmpty, let data = line.data(using: .utf8) else {
+                    continue
+                }
+                if let receiver = await buffer.enqueue(data) {
+                    receiver.resume(returning: data)
                 }
             }
         }
+    }
 
-        throw MCPError.transportClosed
+    private func failPendingReceivers() async {
+        isConnected = false
+        let receivers = await lineBuffer.failAll()
+        for receiver in receivers {
+            receiver.resume(throwing: MCPError.transportClosed)
+        }
     }
 }
 
