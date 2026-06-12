@@ -6,14 +6,26 @@ actor LineBuffer {
     private var waiters: [CheckedContinuation<Data, Error>] = []
 
     func dequeueOrWait(isConnected: Bool) async throws -> Data {
-        if !lines.isEmpty {
-            return lines.removeFirst()
+        try await withTaskCancellationHandler {
+            if !lines.isEmpty {
+                return lines.removeFirst()
+            }
+            guard isConnected else {
+                throw MCPError.transportClosed
+            }
+            return try await withCheckedThrowingContinuation { continuation in
+                waiters.append(continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelWaiters() }
         }
-        guard isConnected else {
-            throw MCPError.transportClosed
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            waiters.append(continuation)
+    }
+
+    func cancelWaiters() {
+        let receivers = waiters
+        waiters = []
+        for receiver in receivers {
+            receiver.resume(throwing: CancellationError())
         }
     }
 

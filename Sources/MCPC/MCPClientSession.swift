@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MCPClient
 
 /// Generic MCP client session for any configured server.
@@ -8,6 +9,7 @@ public actor MCPClientSession {
     public private(set) var serverInfo: InitializeResult?
 
     private let connection: MCPClientConnection
+    private let log = MCPCLogging.logger("session")
 
     public init(config: AppConfig, serverName: String) async throws {
         self.config = config
@@ -25,6 +27,17 @@ public actor MCPClientSession {
             clientVersion: config.app.version,
             protocolVersion: config.client.protocolVersion
         )
+        if let info = self.serverInfo {
+            log.info(
+                "Connected",
+                metadata: [
+                    "server": .string(server.name),
+                    "transport": .string(server.transport.rawValue),
+                    "remote_name": .string(info.serverInfo.name),
+                    "remote_version": .string(info.serverInfo.version),
+                ]
+            )
+        }
     }
 
     public static func connect(
@@ -71,7 +84,9 @@ public actor MCPClientSession {
     }
 
     public func disconnect() async throws {
+        log.info("Disconnecting", metadata: ["server": .string(server.name)])
         try await connection.disconnect()
+        log.debug("Disconnected", metadata: ["server": .string(server.name)])
     }
 }
 

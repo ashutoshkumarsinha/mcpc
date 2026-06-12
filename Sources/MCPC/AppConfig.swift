@@ -1,14 +1,22 @@
 import Foundation
+import Logging
 import TOMLKit
 
 public struct AppConfig: Sendable {
     public var app: AppSettings
     public var client: ClientSettings
+    public var logging: LoggingSettings
     public var servers: [ServerConfig]
 
-    public init(app: AppSettings, client: ClientSettings, servers: [ServerConfig]) {
+    public init(
+        app: AppSettings,
+        client: ClientSettings,
+        logging: LoggingSettings = .default,
+        servers: [ServerConfig]
+    ) {
         self.app = app
         self.client = client
+        self.logging = logging
         self.servers = servers
     }
 
@@ -191,6 +199,7 @@ extension ServerConfig {
 private struct AppConfigDTO: Decodable {
     var app: AppSettings
     var client: ClientSettings
+    var logging: LoggingSettings?
     var servers: [ServerConfig]
 }
 
@@ -226,6 +235,7 @@ public enum AppConfigError: Error, CustomStringConvertible {
 
 public enum AppConfigLoader {
     public static let defaultFileName = "config.toml"
+    private static let log = MCPCLogging.logger("config")
 
     public static func load(from url: URL) throws -> AppConfig {
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -262,7 +272,29 @@ public enum AppConfigLoader {
             try server.validate()
         }
 
-        return AppConfig(app: dto.app, client: dto.client, servers: dto.servers)
+        let logging = Self.mergedLogging(dto.logging)
+        let config = AppConfig(app: dto.app, client: dto.client, logging: logging, servers: dto.servers)
+        log.info(
+            "Loaded config",
+            metadata: [
+                "path": .string(url.path),
+                "servers": .stringConvertible(config.servers.count),
+                "default_server": .string(config.client.defaultServer),
+                "log_level": .string(logging.level.rawValue),
+            ]
+        )
+        return config
+    }
+
+    private static func mergedLogging(_ settings: LoggingSettings?) -> LoggingSettings {
+        var merged = LoggingSettings.default
+        guard let settings else { return merged }
+        merged.level = settings.level
+        merged.destination = settings.destination
+        for (key, value) in settings.components {
+            merged.components[key] = value
+        }
+        return merged
     }
 
     public static func defaultConfigURL(

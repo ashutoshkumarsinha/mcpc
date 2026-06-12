@@ -11,26 +11,27 @@ protocol_version = "2024-11-05"
 request_timeout_seconds = 120
 log_server_stderr = false
 
+[logging]
+# Global log level: trace | debug | info | notice | warning | error | critical | none
+level = "info"
+# Where MCPC writes its own logs: stderr | stdout | none
+destination = "stderr"
+
+[logging.components]
+# Per-label overrides (exact match or prefix). Useful for noisy dependencies.
+mcpc = "info"
+MCPClient = "warning"
+
 # --- MCP servers -----------------------------------------------------------
 # transport: "stdio" | "http_sse" | "websocket"
 
+# Bundled integration-test server (Python — see test-server/). Requires uv for `make test`.
 [[servers]]
 name = "test-server"
 transport = "stdio"
 command = "uv"
 args = ["run", "--directory", "test-server", "python", "server.py"]
-
-[[servers]]
-name = "3gpp-researcher-suite"
-transport = "stdio"
-command = "uv"
-args = [
-  "run",
-  "--directory",
-  "/Users/deeproot/PycharmProjects/3gpp-research-rag",
-  "python",
-  "mcp_server.py",
-]
+env = { PYTHONUNBUFFERED = "1" }
 
 # Example remote server (uncomment and set URL to use):
 # [[servers]]

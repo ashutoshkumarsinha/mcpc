@@ -1,6 +1,6 @@
 import Foundation
 
-/// Builds a subprocess environment compatible with the Python MCP stdio client.
+/// Builds a minimal subprocess environment for stdio MCP servers.
 enum ProcessEnvironment {
     private static let inheritedKeys = [
         "HOME",
@@ -25,9 +25,6 @@ enum ProcessEnvironment {
                 env[key] = value
             }
         }
-
-        // Unbuffered Python stdout/stderr over pipes.
-        env["PYTHONUNBUFFERED"] = "1"
 
         for (key, value) in overrides {
             env[key] = value

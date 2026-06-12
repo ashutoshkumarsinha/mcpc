@@ -1,11 +1,21 @@
 import Foundation
+import Logging
 import MCPClient
 
 public enum TransportFactory {
+    private static let log = MCPCLogging.logger("transport")
+
     public static func makeTransport(
         for server: ServerConfig,
         client: ClientSettings
     ) throws -> any MCPTransport {
+        log.debug(
+            "Creating transport",
+            metadata: [
+                "server": .string(server.name),
+                "transport": .string(server.transport.rawValue),
+            ]
+        )
         switch server.transport {
         case .stdio:
             guard let command = server.command else {

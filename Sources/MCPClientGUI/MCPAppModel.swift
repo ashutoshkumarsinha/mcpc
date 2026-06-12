@@ -69,6 +69,7 @@ final class MCPAppModel {
         do {
             let loaded = try AppConfigLoader.load(from: configURL)
             config = loaded
+            MCPCLogging.update(with: loaded.logging)
             errorMessage = nil
             statusMessage = "Loaded \(loaded.servers.count) server(s) from \(configURL.lastPathComponent)"
 
@@ -91,7 +92,7 @@ final class MCPAppModel {
         }
 
         Task {
-            await disconnectIfNeeded()
+            await shutdown()
             connectionState = .connecting
             isBusy = true
             errorMessage = nil
@@ -128,14 +129,18 @@ final class MCPAppModel {
 
     func disconnect() {
         Task {
-            await disconnectIfNeeded()
-            connectionState = .disconnected
-            connectedServerTitle = nil
-            tools = []
-            resources = []
-            prompts = []
+            await shutdown()
             statusMessage = "Disconnected"
         }
+    }
+
+    func shutdown() async {
+        await disconnectIfNeeded()
+        connectionState = .disconnected
+        connectedServerTitle = nil
+        tools = []
+        resources = []
+        prompts = []
     }
 
     func refreshCatalog() async throws {

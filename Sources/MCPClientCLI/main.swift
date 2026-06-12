@@ -15,9 +15,11 @@ struct MCPClientCLI {
 
     private static func run() async throws {
         let options = try parseArguments(CommandLine.arguments)
+        MCPCLogging.bootstrap(with: .default)
+        let config = try AppConfigLoader.load(from: options.configURL)
+        MCPCLogging.update(with: config.logging)
 
         if case .listServers = options.command {
-            let config = try AppConfigLoader.load(from: options.configURL)
             if config.servers.isEmpty {
                 print("No servers configured.")
                 return
@@ -41,10 +43,7 @@ struct MCPClientCLI {
             return
         }
 
-        let session = try await MCPClientSession.connect(
-            configURL: options.configURL,
-            serverName: options.serverName
-        )
+        let session = try await MCPClientSession(config: config, serverName: try config.resolvedServerName(options.serverName))
         defer {
             Task {
                 try? await session.disconnect()

@@ -14,6 +14,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/jpurnell/SwiftMCPClient.git", from: "0.9.0"),
         .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.5.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
     ],
     targets: [
         .target(
@@ -21,6 +22,7 @@ let package = Package(
             dependencies: [
                 .product(name: "MCPClient", package: "SwiftMCPClient"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
+                .product(name: "Logging", package: "swift-log"),
             ]
         ),
         .executableTarget(

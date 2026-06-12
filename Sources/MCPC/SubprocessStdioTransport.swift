@@ -25,6 +25,7 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
     private var isConnected = false
 
     private let lineBuffer = LineBuffer()
+    private let log = MCPCLogging.logger("transport.stdio")
 
     init(
         command: String,
@@ -55,8 +56,24 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
         do {
             try proc.run()
         } catch {
+            log.error(
+                "Failed to spawn subprocess",
+                metadata: [
+                    "command": .string(command),
+                    "error": .string(error.localizedDescription),
+                ]
+            )
             throw MCPError.processSpawnFailed(reason: error.localizedDescription)
         }
+
+        log.info(
+            "Spawned subprocess",
+            metadata: [
+                "command": .string(command),
+                "pid": .stringConvertible(proc.processIdentifier),
+                "args": .string(arguments.joined(separator: " ")),
+            ]
+        )
 
         process = proc
         stdinPipe = stdin
@@ -91,13 +108,19 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
     }
 
     func disconnect() async throws {
+        guard isConnected || process != nil else { return }
         isConnected = false
-        stdoutReaderTask?.cancel()
-        stdoutReaderTask = nil
-        stderrDrainTask?.cancel()
-        stderrDrainTask = nil
+        log.debug("Disconnecting stdio transport")
 
         stdinPipe?.fileHandleForWriting.closeFile()
+
+        stdoutReaderTask?.cancel()
+        stderrDrainTask?.cancel()
+        if let stdoutReaderTask {
+            _ = await stdoutReaderTask.value
+        }
+        stdoutReaderTask = nil
+        stderrDrainTask = nil
 
         if let proc = process, proc.isRunning {
             try await Task.sleep(for: .milliseconds(100))
@@ -117,10 +140,8 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
         process = nil
         stdinPipe = nil
 
-        let receivers = await lineBuffer.failAll()
-        for receiver in receivers {
-            receiver.resume(throwing: MCPError.transportClosed)
-        }
+        await lineBuffer.cancelWaiters()
+        log.debug("Stdio transport disconnected")
     }
 
     func send(_ data: Data) async throws {
@@ -136,10 +157,13 @@ final class SubprocessStdioTransport: MCPTransport, @unchecked Sendable {
         var messageData = data
         messageData.append(0x0A)
         try pipe.fileHandleForWriting.write(contentsOf: messageData)
+        log.trace("Sent message", metadata: ["bytes": .stringConvertible(messageData.count)])
     }
 
     func receive() async throws -> Data {
-        try await lineBuffer.dequeueOrWait(isConnected: isConnected)
+        let data = try await lineBuffer.dequeueOrWait(isConnected: isConnected)
+        log.trace("Received message", metadata: ["bytes": .stringConvertible(data.count)])
+        return data
     }
 
     private func readStdoutLoop(handle: FileHandle, process: Process, buffer: LineBuffer) async {
