@@ -1,0 +1,21 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Devbox
+.devbox/
+
+# Xcode / IDE
+.idea/
+*.xcworkspace
+
+# Local env and secrets
+.env
+.env.*
+*.local.json
