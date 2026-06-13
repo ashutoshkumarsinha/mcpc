@@ -1,19 +1,22 @@
 import Foundation
-import MCPC
-import MCPClient
+import MCPC      // config, CLI parser, logging, session types.
+import MCPClient   // MCP protocol types (MCPContent, formatters).
 
+// @main = this struct's static main() is the program entry point.
 @main
 struct MCPClientCLI {
+    // async = can await network/subprocess work without blocking threads.
     static func main() async {
         do {
             try await run()
         } catch let error as MCPCLIError {
+            // User ran `mcpc --help` — print usage and exit successfully.
             if case .helpRequested = error {
                 print(MCPCLI.usageText)
                 return
             }
             fputs("error: \(error)\n", stderr)
-            exit(1)
+            exit(1) // non-zero exit tells shell/scripts the command failed
         } catch {
             fputs("error: \(error)\n", stderr)
             exit(1)
@@ -21,11 +24,14 @@ struct MCPClientCLI {
     }
 
     private static func run() async throws {
+        // Parse argv into command, server name, config path, tool args, etc.
         let options = try MCPCLI.parseArguments(CommandLine.arguments)
         MCPCLogging.bootstrap(with: .default)
+        // Load config.toml from path resolved by MCPCLI (see AppConfigLoader).
         let config = try AppConfigLoader.load(from: options.configURL)
         MCPCLogging.update(with: config.logging)
 
+        // list-servers is special: no MCP connection needed.
         if case .listServers = options.command {
             if config.servers.isEmpty {
                 print("No servers configured.")
@@ -35,6 +41,7 @@ struct MCPClientCLI {
                 let endpoint: String
                 switch server.transport {
                 case .stdio:
+                    // Show command + args as the human-readable endpoint.
                     var parts: [String] = []
                     if let command = server.command {
                         parts.append(command)
@@ -50,6 +57,7 @@ struct MCPClientCLI {
             return
         }
 
+        // Open connection to one server from config.
         let session = try await MCPClientSession(
             config: config,
             serverName: try config.resolvedServerName(options.serverName)
@@ -62,7 +70,7 @@ struct MCPClientCLI {
         do {
             switch options.command {
             case .listServers:
-                break
+                break // handled above
 
             case .ping:
                 let ok = try await session.ping()
@@ -105,7 +113,7 @@ struct MCPClientCLI {
                 if result.isError == true {
                     try await session.disconnect()
                     fputs(text.isEmpty ? "tool returned an error\n" : "\(text)\n", stderr)
-                    exit(2)
+                    exit(2) // distinct exit code for tool-level errors
                 }
                 print(text)
 
@@ -121,7 +129,7 @@ struct MCPClientCLI {
                 }
             }
         } catch {
-            try? await session.disconnect()
+            try? await session.disconnect() // best-effort cleanup before rethrowing
             throw error
         }
 
@@ -129,6 +137,7 @@ struct MCPClientCLI {
     }
 }
 
+// Turn MCP prompt message content into printable text for the terminal.
 private func promptMessageText(_ content: MCPContent) -> String {
     switch content {
     case .text(let text, _):

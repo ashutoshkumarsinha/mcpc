@@ -1,17 +1,17 @@
-import Foundation
-import Logging
-import TOMLKit
+import Foundation // FileManager, URL, ProcessInfo, Codable
+import Logging // Logging types used by loader
+import TOMLKit // TOML parsing/decoding library
 
-public struct AppConfig: Sendable {
-    public var app: AppSettings
-    public var client: ClientSettings
-    public var logging: LoggingSettings
-    public var servers: [ServerConfig]
+public struct AppConfig: Sendable { // Top-level configuration loaded from config.toml; `Sendable` for concurrency
+    public var app: AppSettings // Application metadata (name, version)
+    public var client: ClientSettings // Client behavior settings
+    public var logging: LoggingSettings // Logging configuration
+    public var servers: [ServerConfig] // Array of MCP server definitions
 
-    public init(
+    public init( // Memberwise initializer
         app: AppSettings,
         client: ClientSettings,
-        logging: LoggingSettings = .default,
+        logging: LoggingSettings = .default, // Default logging when omitted
         servers: [ServerConfig]
     ) {
         self.app = app
@@ -20,47 +20,47 @@ public struct AppConfig: Sendable {
         self.servers = servers
     }
 
-    public func server(named name: String) throws -> ServerConfig {
-        guard let server = servers.first(where: { $0.name == name }) else {
+    public func server(named name: String) throws -> ServerConfig { // Look up one server by name or throw
+        guard let server = servers.first(where: { $0.name == name }) else { // `guard` fails when not found
             throw AppConfigError.serverNotFound(
                 name: name,
-                available: servers.map(\.name)
+                available: servers.map(\.name) // Include available names in error
             )
         }
-        return server
+        return server // Return matching ServerConfig
     }
 
-    public func resolvedServerName(_ explicit: String?) throws -> String {
-        if let explicit, !explicit.isEmpty {
+    public func resolvedServerName(_ explicit: String?) throws -> String { // Choose CLI/GUI server name
+        if let explicit, !explicit.isEmpty { // Use explicit name when provided
             return explicit
         }
-        guard !client.defaultServer.isEmpty else {
+        guard !client.defaultServer.isEmpty else { // Otherwise require default_server in config
             throw AppConfigError.missingDefaultServer
         }
-        return client.defaultServer
+        return client.defaultServer // Fall back to configured default
     }
 }
 
-public struct AppSettings: Codable, Sendable {
-    public var name: String
-    public var version: String
+public struct AppSettings: Codable, Sendable { // `[app]` table in TOML
+    public var name: String // Client name sent during MCP initialize
+    public var version: String // Client version sent during MCP initialize
 
-    public init(name: String = "mcpc", version: String = "1.0.0") {
+    public init(name: String = "mcpc", version: String = "1.0.0") { // Defaults for new configs
         self.name = name
         self.version = version
     }
 }
 
-public struct ClientSettings: Sendable {
-    public var defaultServer: String
-    public var protocolVersion: String
-    public var requestTimeoutSeconds: Int
-    public var logServerStderr: Bool
-    public var mcpJSONHotReload: Bool
-    public var mcpJSONWatchPaths: [String]
-    public var mcpJSONSyncedServers: [String]
+public struct ClientSettings: Sendable { // `[client]` table in TOML
+    public var defaultServer: String // Name of default [[servers]] entry
+    public var protocolVersion: String // MCP protocol version string
+    public var requestTimeoutSeconds: Int // Per-request timeout in seconds
+    public var logServerStderr: Bool // Forward stdio server stderr to our stderr
+    public var mcpJSONHotReload: Bool // Watch Cursor mcp.json and auto-sync
+    public var mcpJSONWatchPaths: [String] // Optional override paths to watch
+    public var mcpJSONSyncedServers: [String] // Server names managed by JSON sync
 
-    public init(
+    public init( // Defaults for programmatic construction
         defaultServer: String = "",
         protocolVersion: String = "2024-11-05",
         requestTimeoutSeconds: Int = 120,
@@ -79,9 +79,9 @@ public struct ClientSettings: Sendable {
     }
 }
 
-extension ClientSettings: Decodable {
-    enum CodingKeys: String, CodingKey {
-        case defaultServer = "default_server"
+extension ClientSettings: Decodable { // Custom decode maps snake_case TOML keys to camelCase properties
+    enum CodingKeys: String, CodingKey { // `CodingKey` enum lists JSON/TOML field names
+        case defaultServer = "default_server" // Map TOML key to property
         case protocolVersion = "protocol_version"
         case requestTimeoutSeconds = "request_timeout_seconds"
         case logServerStderr = "log_server_stderr"
@@ -90,9 +90,9 @@ extension ClientSettings: Decodable {
         case mcpJSONSyncedServers = "mcp_json_synced_servers"
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        defaultServer = try container.decodeIfPresent(String.self, forKey: .defaultServer) ?? ""
+    public init(from decoder: Decoder) throws { // `throws` when required values are invalid
+        let container = try decoder.container(keyedBy: CodingKeys.self) // Keyed decoding container
+        defaultServer = try container.decodeIfPresent(String.self, forKey: .defaultServer) ?? "" // Optional with default ""
         protocolVersion = try container.decodeIfPresent(String.self, forKey: .protocolVersion) ?? "2024-11-05"
         requestTimeoutSeconds = try container.decodeIfPresent(Int.self, forKey: .requestTimeoutSeconds) ?? 120
         logServerStderr = try container.decodeIfPresent(Bool.self, forKey: .logServerStderr) ?? false
@@ -102,15 +102,15 @@ extension ClientSettings: Decodable {
     }
 }
 
-public enum ServerTransport: Sendable, Equatable {
-    case stdio
+public enum ServerTransport: Sendable, Equatable { // Transport kind for a server entry
+    case stdio // Local subprocess
     /// MCP HTTP with Server-Sent Events (2024-11-05): GET `/sse` stream + POST message endpoint.
     case sse
     /// MCP Streamable HTTP (2025-03-26): single `/mcp` endpoint with optional SSE streaming.
     case streamableHTTP
-    case websocket
+    case websocket // WebSocket transport
 
-    public var configKey: String {
+    public var configKey: String { // String written to/read from config.toml `transport` field
         switch self {
         case .stdio: "stdio"
         case .sse: "sse"
@@ -119,8 +119,8 @@ public enum ServerTransport: Sendable, Equatable {
         }
     }
 
-    public static func parse(_ raw: String) -> ServerTransport? {
-        switch raw.lowercased() {
+    public static func parse(_ raw: String) -> ServerTransport? { // Parse config/import string to enum; nil if unknown
+        switch raw.lowercased() { // Case-insensitive matching
         case "stdio":
             return .stdio
         case "sse", "http_sse":
@@ -135,40 +135,40 @@ public enum ServerTransport: Sendable, Equatable {
     }
 }
 
-extension ServerTransport: Codable {
+extension ServerTransport: Codable { // Encode/decode as single string value
     public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-        guard let transport = ServerTransport.parse(raw) else {
+        let container = try decoder.singleValueContainer() // Transport is a scalar string in TOML
+        let raw = try container.decode(String.self) // Read raw transport string
+        guard let transport = ServerTransport.parse(raw) else { // `guard` throws on unknown value
             throw DecodingError.dataCorruptedError(
                 in: container,
                 debugDescription: "Unknown transport '\(raw)'"
             )
         }
-        self = transport
+        self = transport // Assign parsed enum case
     }
 
-    public func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws { // Write transport back as config key string
         var container = encoder.singleValueContainer()
         try container.encode(configKey)
     }
 }
 
-public struct ServerConfig: Sendable {
-    public var name: String
-    public var transport: ServerTransport
-    public var command: String?
-    public var args: [String]
-    public var env: [String: String]
-    public var workingDirectory: String?
-    public var url: String?
-    public var headers: [String: String]
-    public var trustSelfSignedCertificates: Bool
-    public var connectionTimeoutSeconds: Int
-    public var maxReconnectAttempts: Int
-    public var reconnectBaseDelaySeconds: Double
+public struct ServerConfig: Sendable { // One `[[servers]]` table worth of settings
+    public var name: String // Unique server name
+    public var transport: ServerTransport // How to connect (stdio/sse/etc.)
+    public var command: String? // stdio executable path
+    public var args: [String] // stdio CLI arguments
+    public var env: [String: String] // stdio environment overrides
+    public var workingDirectory: String? // stdio working directory
+    public var url: String? // Remote transport URL
+    public var headers: [String: String] // HTTP/WebSocket headers
+    public var trustSelfSignedCertificates: Bool // TLS setting for remote transports
+    public var connectionTimeoutSeconds: Int // Connect timeout for network transports
+    public var maxReconnectAttempts: Int // SSE reconnect attempts
+    public var reconnectBaseDelaySeconds: Double // SSE reconnect backoff base
 
-    public init(
+    public init( // Programmatic initializer with defaults
         name: String,
         transport: ServerTransport,
         command: String? = nil,
@@ -197,7 +197,7 @@ public struct ServerConfig: Sendable {
     }
 }
 
-extension ServerConfig: Decodable {
+extension ServerConfig: Decodable { // Decode one server table from TOML
     enum CodingKeys: String, CodingKey {
         case name
         case transport
@@ -215,9 +215,9 @@ extension ServerConfig: Decodable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        transport = try container.decode(ServerTransport.self, forKey: .transport)
-        command = try container.decodeIfPresent(String.self, forKey: .command)
+        name = try container.decode(String.self, forKey: .name) // Required name
+        transport = try container.decode(ServerTransport.self, forKey: .transport) // Required transport
+        command = try container.decodeIfPresent(String.self, forKey: .command) // Optional stdio command
         args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
         env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
@@ -242,8 +242,8 @@ extension ServerConfig: Decodable {
     }
 }
 
-extension ServerConfig: Equatable {
-    public static func == (lhs: ServerConfig, rhs: ServerConfig) -> Bool {
+extension ServerConfig: Equatable { // Value equality for change detection during JSON sync
+    public static func == (lhs: ServerConfig, rhs: ServerConfig) -> Bool { // Compare all stored fields
         lhs.name == rhs.name
             && lhs.transport == rhs.transport
             && lhs.command == rhs.command
@@ -261,23 +261,23 @@ extension ServerConfig: Equatable {
 
 extension ServerConfig {
 
-    public func validate() throws {
+    public func validate() throws { // Ensure transport-specific required fields are present
         switch transport {
         case .stdio:
-            guard let command, !command.isEmpty else {
+            guard let command, !command.isEmpty else { // stdio needs non-empty command
                 throw AppConfigError.invalidServer(
                     name: name,
                     reason: "stdio transport requires 'command'"
                 )
             }
         case .sse, .streamableHTTP, .websocket:
-            guard let url, !url.isEmpty else {
+            guard let url, !url.isEmpty else { // Remote transports need URL string
                 throw AppConfigError.invalidServer(
                     name: name,
                     reason: "\(transport.configKey) transport requires 'url'"
                 )
             }
-            guard URL(string: url) != nil else {
+            guard URL(string: url) != nil else { // URL must parse as Foundation URL
                 throw AppConfigError.invalidServer(
                     name: name,
                     reason: "invalid url: \(url)"
@@ -287,10 +287,10 @@ extension ServerConfig {
     }
 }
 
-private struct AppConfigDTO: Decodable {
+private struct AppConfigDTO: Decodable { // Intermediate decode shape matching TOML top-level tables
     var app: AppSettings
     var client: ClientSettings
-    var logging: LoggingSettings?
+    var logging: LoggingSettings? // Optional in file; merged with defaults
     var servers: [ServerConfig]
 
     enum CodingKeys: String, CodingKey {
@@ -309,7 +309,7 @@ private struct AppConfigDTO: Decodable {
     }
 }
 
-public enum AppConfigError: Error, CustomStringConvertible {
+public enum AppConfigError: Error, CustomStringConvertible { // Typed config load/write/validation errors
     case fileNotFound(URL)
     case parseFailed(String)
     case decodeFailed(String)
@@ -319,7 +319,7 @@ public enum AppConfigError: Error, CustomStringConvertible {
     case duplicateServerName(String)
     case writeFailed(URL, String)
 
-    public var description: String {
+    public var description: String { // String representation for logging/UI
         switch self {
         case .fileNotFound(let url):
             return "Config not found at \(url.path)"
@@ -342,48 +342,48 @@ public enum AppConfigError: Error, CustomStringConvertible {
     }
 }
 
-public enum AppConfigLoader {
-    public static let defaultFileName = "config.toml"
-    private static let log = MCPCLogging.logger("config")
+public enum AppConfigLoader { // Load config.toml from disk
+    public static let defaultFileName = "config.toml" // Default filename in cwd/user dir
+    private static let log = MCPCLogging.logger("config") // Logger for config loading
 
-    public static func load(from url: URL) throws -> AppConfig {
-        guard FileManager.default.fileExists(atPath: url.path) else {
+    public static func load(from url: URL) throws -> AppConfig { // Parse + validate config file
+        guard FileManager.default.fileExists(atPath: url.path) else { // File must exist
             throw AppConfigError.fileNotFound(url)
         }
 
-        let contents: String
+        let contents: String // Raw TOML text
         do {
-            contents = try String(contentsOf: url, encoding: .utf8)
+            contents = try String(contentsOf: url, encoding: .utf8) // Read UTF-8 file contents
         } catch {
             throw AppConfigError.parseFailed(error.localizedDescription)
         }
 
-        let table: TOMLTable
+        let table: TOMLTable // Parsed TOML root table
         do {
-            table = try TOMLTable(string: contents)
+            table = try TOMLTable(string: contents) // Parse TOML syntax
         } catch {
             throw AppConfigError.parseFailed(error.localizedDescription)
         }
 
-        let dto: AppConfigDTO
+        let dto: AppConfigDTO // Decode into DTO struct
         do {
-            dto = try TOMLDecoder().decode(AppConfigDTO.self, from: table)
+            dto = try TOMLDecoder().decode(AppConfigDTO.self, from: table) // Map TOML -> Swift types
         } catch {
             throw AppConfigError.decodeFailed(error.localizedDescription)
         }
 
-        var seen = Set<String>()
-        for server in dto.servers {
+        var seen = Set<String>() // Track duplicate server names
+        for server in dto.servers { // Validate each server entry
             if seen.contains(server.name) {
                 throw AppConfigError.duplicateServerName(server.name)
             }
             seen.insert(server.name)
-            try server.validate()
+            try server.validate() // Transport-specific validation
         }
 
-        let logging = Self.mergedLogging(dto.logging)
-        let config = AppConfig(app: dto.app, client: dto.client, logging: logging, servers: dto.servers)
-        log.info(
+        let logging = Self.mergedLogging(dto.logging) // Merge optional logging section with defaults
+        let config = AppConfig(app: dto.app, client: dto.client, logging: logging, servers: dto.servers) // Build public AppConfig
+        log.info( // Log successful load summary
             "Loaded config",
             metadata: [
                 "path": .string(url.path),
@@ -395,38 +395,38 @@ public enum AppConfigLoader {
         return config
     }
 
-    private static func mergedLogging(_ settings: LoggingSettings?) -> LoggingSettings {
-        var merged = LoggingSettings.default
-        guard let settings else { return merged }
+    private static func mergedLogging(_ settings: LoggingSettings?) -> LoggingSettings { // Overlay file logging onto defaults
+        var merged = LoggingSettings.default // Start from defaults
+        guard let settings else { return merged } // No [logging] table => defaults only
         merged.level = settings.level
         merged.destination = settings.destination
         merged.logFile = settings.logFile
-        for (key, value) in settings.components {
+        for (key, value) in settings.components { // Merge per-component overrides
             merged.components[key] = value
         }
         return merged
     }
 
-    public static func defaultConfigURL(
+    public static func defaultConfigURL( // Resolve which config.toml path to use
         explicitPath: String? = nil,
         fileManager: FileManager = .default
     ) -> URL {
-        if let explicitPath, !explicitPath.isEmpty {
+        if let explicitPath, !explicitPath.isEmpty { // CLI --config wins
             return URL(fileURLWithPath: explicitPath).standardizedFileURL
         }
-        if let envPath = ProcessInfo.processInfo.environment["MCPC_CONFIG"], !envPath.isEmpty {
+        if let envPath = ProcessInfo.processInfo.environment["MCPC_CONFIG"], !envPath.isEmpty { // Env var override
             return URL(fileURLWithPath: envPath).standardizedFileURL
         }
         let cwdConfig = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
-            .appendingPathComponent(defaultFileName)
+            .appendingPathComponent(defaultFileName) // ./config.toml in current working directory
         if fileManager.fileExists(atPath: cwdConfig.path) {
             return cwdConfig.standardizedFileURL
         }
-        let userConfig = MCPCUserDirectory.configURL(fileManager: fileManager)
+        let userConfig = MCPCUserDirectory.configURL(fileManager: fileManager) // Application Support config path
         if fileManager.fileExists(atPath: userConfig.path) {
             return userConfig
         }
-        _ = try? MCPCUserDirectory.prepareForFirstLaunch(fileManager: fileManager)
-        return userConfig
+        _ = try? MCPCUserDirectory.prepareForFirstLaunch(fileManager: fileManager) // Best-effort first-launch setup
+        return userConfig // Return user config path even if we had to create scaffolding
     }
 }
